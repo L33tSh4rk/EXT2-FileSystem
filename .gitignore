@@ -1,0 +1,8 @@
+# Ignora todo o conteúdo da pasta bin...
+/bin/*
+
+# ... exceto o nosso arquivo .gitkeep.
+!/bin/.gitkeep
+
+# Ignora arquivos objeto
+*.o
