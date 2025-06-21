@@ -3,10 +3,11 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE
 
 # Diretórios e arquivos
-TARGET = bin/ext2shell
-SRCS = main.c systemOp.c
+TARGET_DIR = bin
+TARGET = $(TARGET_DIR)/ext2shell
+SRCS = main.c systemOp.c commands.c
 OBJS = $(SRCS:.c=.o)
-HEADERS = headers.h
+HEADERS = headers.h commands.h
 
 # Regras
 .PHONY: all clean
@@ -14,11 +15,12 @@ HEADERS = headers.h
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	@mkdir -p bin
+	@mkdir -p $(TARGET_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
 %.o: %.c $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o $(TARGET)
+	# Remove os arquivos objeto da raiz e o executável de dentro de /bin
+	rm -f $(OBJS) $(TARGET)

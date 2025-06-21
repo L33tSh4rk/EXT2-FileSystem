@@ -16,6 +16,7 @@
 #include <fcntl.h>  // Para open()
 
 #include "headers.h"
+#include "commands.h"
 
 
 void imprimir_ajuda(void) {
@@ -43,7 +44,7 @@ int main(int argc, char *argv[]) {
     printf("Abrindo a imagem do disco: %s\n", caminho_imagem);
 
     // Abre a imagem em modo de leitura (por enquanto)
-    int fd = open(caminho_imagem, O_RDONLY);
+    int fd = open(caminho_imagem, O_RDWR);
     if (fd == -1) {
         perror("Erro fatal ao abrir a imagem do disco");
         return 1;
@@ -79,15 +80,21 @@ int main(int argc, char *argv[]) {
     }
     printf("Tabela de descritores de grupo lida com sucesso (%u grupos).\n\n", num_grupos);
 
+
+    uint32_t diretorio_atual_inode = EXT2_ROOT_INO;
+
+    // Define a string do caminho atual, começando na raiz.
+    char diretorio_atual_str[1024] = "/";
+
     // 3. LOOP PRINCIPAL DO SHELL
     char linha_comando[256];
-    char prompt[50]; // Buffer para o prompt
+    char prompt[1024 + 4]; // Buffer para o prompt
 
 
 
     do {
-        snprintf(prompt, sizeof(prompt), "[/]> ");
-        printf("%s", prompt);
+        snprintf(prompt, sizeof(prompt), "[%s]> ", diretorio_atual_str);
+        printf("\n%s", prompt);
 
         if (fgets(linha_comando, sizeof(linha_comando), stdin) == NULL) {
             printf("\nSaindo (EOF detectado)...\n");
@@ -100,53 +107,72 @@ int main(int argc, char *argv[]) {
         }
 
         if (strcmp(comando, "print") == 0) {
-            char* arg1 = strtok(NULL, " \t\n\r");
+            char* subcomando = strtok(NULL, " \t\n\r");
+            if (subcomando == NULL) {
+                printf("Comando 'print' incompleto. Uso: 'print superblock', 'print inode <n>', 'print groups'.\n");
+            
+            } else if (strcmp(subcomando, "superblock") == 0) {
+                comando_print_superblock(&sb);
+            
+            } else if (strcmp(subcomando, "inode") == 0) {
+                char* arg_num_inode = strtok(NULL, " \t\n\r");
+                comando_print_inode(fd, &sb, gdt, arg_num_inode);
+            
+            } else if (strcmp(subcomando, "groups") == 0) {
+                comando_print_groups(gdt, num_grupos);
+            
+            } else {
+                printf("Argumento desconhecido para 'print': '%s'\n", subcomando);
+            }
+        }
+        else if (strcmp(comando, "info") == 0) {
+            comando_info(&sb, num_grupos);
+        }
+        
+        else if (strcmp(comando, "attr") == 0) {
+            char* caminho_arg = strtok(NULL, " \t\n\r");
+            comando_attr(fd, &sb, gdt, caminho_arg);
+        }
+        
+        else if (strcmp(comando, "cat") == 0) {
+            char* caminho_arg = strtok(NULL, " \t\n\r");
+            comando_cat(fd, &sb, gdt, caminho_arg);
+        }
 
-            if (arg1 != NULL && strcmp(arg1, "superblock") == 0) {
-                if (strtok(NULL, " \t\n\r") == NULL) {
-                    print_superbloco(&sb);
-                } else {
-                    printf("Comando 'print superblock' não aceita argumentos adicionais.\n");
-                }
-            } 
-            else if (arg1 != NULL && strcmp(arg1, "inode") == 0) {
-                char* arg2 = strtok(NULL, " \t\n\r");
-                if (arg2 == NULL) {
-                    printf("Uso: print inode <numero>\n");
-                } else if (strtok(NULL, " \t\n\r") != NULL) {
-                    printf("Comando 'print inode' recebeu argumentos demais.\n");
-                } else {
-                    char* endptr;
-                    long num_inode_long = strtol(arg2, &endptr, 10);
-                    if (*endptr != '\0') {
-                        printf("Erro: O número do inode '%s' é inválido.\n", arg2);
-                    } else {
-                        uint32_t num_inode = (uint32_t)num_inode_long;
-                        inode ino_para_imprimir;
-                        if (ler_inode(fd, &sb, gdt, num_inode, &ino_para_imprimir) == 0) {
-                            print_inode(&ino_para_imprimir, num_inode);
-                        }
-                    }
-                }
-            }
-            else if (arg1 != NULL && strcmp(arg1, "groups") == 0) {
-                if (strtok(NULL, " \t\n\r") == NULL) {
-                    print_groups(gdt, num_grupos);
-                } else {
-                    printf("Comando 'print groups' não aceita argumentos adicionais.\n");
-                }
-            }
-            else {
-                printf("Comando 'print' inválido. Uso: 'print superblock', 'print inode <numero>', ou 'print groups'\n");
-            }
-        } 
+         else if (strcmp(comando, "ls") == 0) {
+            char* caminho_arg = strtok(NULL, " \t\n\r");
+            comando_ls(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+        }
+
+        else if (strcmp(comando, "cd") == 0) {
+            char* caminho_arg = strtok(NULL, " \t\n\r");
+            comando_cd(fd, &sb, gdt, &diretorio_atual_inode, diretorio_atual_str, caminho_arg);
+        }
+
+        else if (strcmp(comando, "pwd") == 0){
+            comando_pwd(diretorio_atual_str);
+        }
+        
+        else if (strcmp(comando, "touch") == 0) {
+            char* caminho_arg = strtok(NULL, " \t\n\r");
+            comando_touch(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+
+        }
+
+        else if (strcmp(comando, "rm") == 0) {
+            char* caminho_arg = strtok(NULL, " \t\n\r");
+            comando_rm(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+        }
+
         else if (strcmp(comando, "help") == 0) {
             imprimir_ajuda();
         } 
+        
         else if (strcmp(comando, "exit") == 0 || strcmp(comando, "quit") == 0) {
             printf("Saindo...\n");
             break;
         } 
+        
         else {
             printf("Comando desconhecido: '%s'. Digite 'help' para ver a lista de comandos.\n", comando);
         }

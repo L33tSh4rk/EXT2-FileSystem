@@ -201,6 +201,12 @@ int liberar_inode(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_num);
 /* Funções de Manipulação de Bloco de Dados */
 int ler_bloco(int fd, const superbloco* sb, uint32_t num_bloco, void* buffer);
 int escrever_bloco(int fd, const superbloco* sb, uint32_t num_bloco, const void* buffer);
+void imprimir_entradas_de_bloco_dir(const char* buffer, uint32_t tamanho_bloco);
+
+uint32_t alocar_bloco(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_num);
+int liberar_bloco(int fd, superbloco* sb, group_desc* gdt, uint32_t num_bloco);
+
+
 
 /* Funções Auxiliares de Bitmap */
 int bit_esta_setado(const unsigned char* bitmap, int bit_idx);
@@ -209,5 +215,23 @@ void limpar_bit(unsigned char* bitmap, int bit_idx);
 
 /*Imprime a lista de comandos disponíveis no shell */
 void imprimir_ajuda(void);
+
+/*Manipulação de diretórios*/
+int listar_entradas_diretorio(int fd, const superbloco* sb, const inode* dir_ino);
+uint32_t procurar_entrada_no_diretorio(int fd, const superbloco* sb, const group_desc* gdt, uint32_t dir_inode_num, const char* nome_procurado);
+uint32_t caminho_para_inode(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, const char* caminho);
+int adicionar_entrada_diretorio(int fd, superbloco* sb, group_desc* gdt, inode* inode_pai, uint32_t inode_pai_num, uint32_t inode_filho, const char* nome_filho, uint8_t tipo_arquivo);
+int remover_entrada_diretorio(int fd, superbloco* sb, inode* inode_pai, const char* nome_filho);
+
+/*Formatação*/
+void formatar_permissoes(uint16_t mode, char* buffer);
+void formatar_tamanho_humano(uint32_t tamanho_bytes, char* buffer, size_t buffer_size);
+void imprimir_formato_attr(const inode* ino);
+
+/* Funções de Conteúdo de Arquivo */
+char* ler_conteudo_arquivo(int fd, const superbloco* sb, const inode* file_ino);
+
+void imprimir_formato_info(const superbloco* sb, uint32_t num_grupos);
+
 
 #endif // EXT2_HEADERS

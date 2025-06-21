@@ -15,7 +15,9 @@
 #include <errno.h>
 #include <string.h>
 #include <time.h>
+
 #include "headers.h"
+#include "commands.h"
 
 // A localização padrão (offset) do superbloco na imagem do disco.
 #define SUPERBLOCO_OFFSET 1024
@@ -779,7 +781,7 @@ int escrever_bloco(int fd, const superbloco* sb, uint32_t num_bloco, const void*
  * @return 1 se o bit for 1 (setado), 0 se o bit for 0 (limpo).
  */
 int bit_esta_setado(const unsigned char* bitmap, int bit_idx) {
-    // Calcula em qual byte do array o nosso bit está.
+    // Calcula em qual byte do array o bit está.
     int byte_idx = bit_idx / 8;
     
     // Calcula a posição do bit dentro daquele byte (de 0 a 7).
@@ -829,9 +831,9 @@ void limpar_bit(unsigned char* bitmap, int bit_idx) {
     unsigned char mascara = (1 << bit_em_byte);
 
     // Inverte a máscara usando o operador NÃO (NOT) bit-a-bit (~).
-    // A máscara invertida terá 0 na posição do nosso bit e 1 em todas as outras.
+    // A máscara invertida terá 0 na posição do bit e 1 em todas as outras.
     // Ex: ~(00001000) -> 11110111
-    // Ao usar o operador E (AND) com essa máscara invertida, forçamos o nosso
+    // Ao usar o operador E (AND) com essa máscara invertida, forçamos o
     // bit para 0 e mantemos todos os outros bits como estavam.
     // Ex: 10101101 & 11110111 -> 10100101
     bitmap[byte_idx] &= ~mascara;
@@ -868,4 +870,924 @@ void print_groups(const group_desc* gdt, uint32_t num_grupos) {
             printf("...\n");
         }
     }
+}
+
+
+/*
+ * =================================================================================
+ * Funções de Manipulação de Diretório
+ * =================================================================================
+ */
+
+
+
+/**
+ * @brief Itera sobre um buffer contendo dados de um bloco de diretório e imprime cada entrada.
+ * Esta é uma função auxiliar de baixo nível.
+ * @param buffer Ponteiro para o buffer de dados já lido do disco.
+ * @param tamanho_bloco O tamanho de um bloco, para checagens de limite.
+ */
+void imprimir_entradas_de_bloco_dir(const char* buffer, uint32_t tamanho_bloco) {
+    uint32_t offset = 0;
+    char nome_arquivo[EXT2_NAME_LEN + 1];
+
+    while (offset < tamanho_bloco) {
+        ext2_dir_entry* entry = (ext2_dir_entry*)(buffer + offset);
+
+        if (entry->rec_len == 0) {
+            fprintf(stderr, "Aviso: Comprimento de registro inválido (0). Fim do bloco ou corrupção.\n");
+            break;
+        }
+
+        // Processa apenas entradas em uso
+        if (entry->inode != 0) {
+            memcpy(nome_arquivo, entry->name, entry->name_len);
+            nome_arquivo[entry->name_len] = '\0';
+            
+            // Impressão no formato exato que você pediu
+            printf("%s\n", nome_arquivo);
+            printf("inode: %u\n", entry->inode);
+            printf("record lenght: %u\n", entry->rec_len);
+            printf("name lenght: %u\n", entry->name_len);
+            printf("file type: %u\n", entry->file_type);
+            printf("\n");
+        }
+
+        // Se a entrada atual for a última, ela preenche o resto do bloco
+        if (offset + entry->rec_len >= tamanho_bloco) {
+            break;
+        }
+
+        offset += entry->rec_len;
+    }
+}
+
+/**
+ * @brief (Função de Depuração) Lê o primeiro bloco de dados de um inode de diretório e lista suas entradas.
+ */
+int listar_entradas_diretorio(int fd, const superbloco* sb, const inode* dir_ino) {
+    if (!dir_ino || !EXT2_IS_DIR(dir_ino->mode)) {
+        fprintf(stderr, "Erro (listar_entradas): Inode inválido ou não é um diretório.\n");
+        return -1;
+    }
+
+    uint32_t primeiro_bloco = dir_ino->block[0];
+    if (primeiro_bloco == 0) {
+        printf("Diretório não possui blocos de dados alocados.\n");
+        return 0;
+    }
+
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    char* buffer = malloc(tamanho_bloco);
+    if (!buffer) {
+        perror("ls: Falha ao alocar memória");
+        return -1;
+    }
+
+    printf("--- Listando Entradas do Bloco %u (via listar_entradas_diretorio) ---\n", primeiro_bloco);
+    if (ler_bloco(fd, sb, primeiro_bloco, buffer) == 0) {
+        imprimir_entradas_de_bloco_dir(buffer, tamanho_bloco);
+    }
+    printf("---------------------------------------------------------------------\n");
+    
+    free(buffer);
+    return 0;
+}
+
+
+
+/**
+ * @brief (Função Auxiliar Estática) Procura por um nome dentro de um único bloco de dados de diretório.
+ *
+ * @param num_bloco O número do bloco a ser lido e verificado.
+ * @param nome_procurado O nome da entrada a ser encontrada.
+ * @param p_inode_encontrado Ponteiro para uma variável onde o inode encontrado será armazenado.
+ * @return 1 se encontrado, 0 se não encontrado, -1 em caso de erro de leitura.
+ */
+static int buscar_nome_em_bloco(int fd, const superbloco* sb, uint32_t num_bloco, const char* nome_procurado, uint32_t* p_inode_encontrado, char* buffer_dados) {
+    if (num_bloco == 0) return 0; // Bloco não alocado, não é um erro.
+    if (ler_bloco(fd, sb, num_bloco, buffer_dados) != 0) return -1; // Erro de leitura
+
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t offset = 0;
+    size_t tam_nome_procurado = strlen(nome_procurado);
+
+    while (offset < tamanho_bloco) {
+        ext2_dir_entry* entry = (ext2_dir_entry*)(buffer_dados + offset);
+        if (entry->rec_len == 0) break;
+
+        if (entry->inode != 0 && entry->name_len == tam_nome_procurado) {
+            if (strncmp(nome_procurado, entry->name, entry->name_len) == 0) {
+                *p_inode_encontrado = entry->inode; // Encontrado! Armazena o resultado.
+                return 1; // Retorna 1 para sinalizar "encontrado"
+            }
+        }
+        if (offset + entry->rec_len >= tamanho_bloco) break;
+        offset += entry->rec_len;
+    }
+    return 0; // Não encontrado neste bloco
+}
+
+
+/**
+ * @brief Procura por uma entrada de nome específico dentro de um diretório, varrendo
+ * todos os seus blocos (diretos e indiretos), e retorna seu número de inode. (VERSÃO FINAL)
+ *
+ * @return O número do inode da entrada encontrada, ou 0 se não for encontrada ou em caso de erro.
+ */
+uint32_t procurar_entrada_no_diretorio(int fd, const superbloco* sb, const group_desc* gdt, uint32_t dir_inode_num, const char* nome_procurado) {
+    inode dir_ino;
+    if (ler_inode(fd, sb, gdt, dir_inode_num, &dir_ino) != 0 || !EXT2_IS_DIR(dir_ino.mode)) {
+        return 0;
+    }
+
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
+    char* buffer_dados = malloc(tamanho_bloco);
+    uint32_t* buffer_ponteiros = malloc(tamanho_bloco); // Usado para L1, L2, e L3
+
+    if (!buffer_dados || !buffer_ponteiros) {
+        perror("procurar_entrada: falha ao alocar buffers");
+        free(buffer_dados); free(buffer_ponteiros);
+        return 0;
+    }
+
+    uint32_t inode_encontrado = 0;
+    int status_busca = 0;
+
+    // 1. Busca nos Blocos Diretos
+    for (int i = 0; i < 12; ++i) {
+        status_busca = buscar_nome_em_bloco(fd, sb, dir_ino.block[i], nome_procurado, &inode_encontrado, buffer_dados);
+        if (status_busca != 0) goto cleanup; // Se encontrou (1) ou deu erro (-1), para a busca.
+    }
+
+    // 2. Busca no Bloco de Indireção Simples
+    if (dir_ino.block[12] != 0) {
+        if (ler_bloco(fd, sb, dir_ino.block[12], buffer_ponteiros) == 0) {
+            for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
+                status_busca = buscar_nome_em_bloco(fd, sb, buffer_ponteiros[i], nome_procurado, &inode_encontrado, buffer_dados);
+                if (status_busca != 0) goto cleanup;
+            }
+        }
+    }
+
+    // 3. Busca no Bloco de Indireção Dupla
+    if (dir_ino.block[13] != 0) {
+        if (ler_bloco(fd, sb, dir_ino.block[13], buffer_ponteiros) == 0) { // Lê L1
+            for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
+                if (buffer_ponteiros[i] == 0) continue;
+                uint32_t* bloco_L2 = malloc(tamanho_bloco);
+                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê L2
+                    for (uint32_t j = 0; j < ponteiros_por_bloco; ++j) {
+                        status_busca = buscar_nome_em_bloco(fd, sb, bloco_L2[j], nome_procurado, &inode_encontrado, buffer_dados);
+                        if (status_busca != 0) { free(bloco_L2); goto cleanup; }
+                    }
+                }
+                free(bloco_L2);
+            }
+        }
+    }
+    
+    // NOTA: A busca em indireção tripla seguiria o mesmo padrão, mas é omitida
+    // pois a complexidade de código é enorme para um caso de uso extremamente raro.
+
+cleanup:
+    free(buffer_dados);
+    free(buffer_ponteiros);
+    return inode_encontrado; // Retorna o inode se foi encontrado (status=1), ou 0 se não (status=0 ou -1)
+}
+
+
+/**
+ * @brief Resolve uma string de caminho para seu número de inode correspondente.
+ *
+ * Navega pela árvore de diretórios a partir de um ponto inicial (raiz ou diretório atual)
+ * para encontrar o inode do alvo final.
+ *
+ * @param fd O descritor de arquivo.
+ * @param sb O superbloco.
+ * @param gdt A tabela de descritores de grupo.
+ * @param inode_dir_atual O inode do diretório de trabalho atual (usado para caminhos relativos).
+ * @param caminho A string do caminho a ser resolvida (ex: "/home/user/doc.txt").
+ * @return O número do inode do alvo, ou 0 se o caminho for inválido ou não for encontrado.
+ */
+uint32_t caminho_para_inode(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, const char* caminho) {
+    // strtok modifica a string, então precisamos de uma cópia
+    char caminho_mutavel[1024];
+    strncpy(caminho_mutavel, caminho, sizeof(caminho_mutavel) - 1);
+    caminho_mutavel[sizeof(caminho_mutavel) - 1] = '\0';
+
+    // Lida com o caso simples de "/"
+    if (strcmp(caminho_mutavel, "/") == 0) {
+        return EXT2_ROOT_INO;
+    }
+
+    uint32_t inode_corrente;
+    char* proximo_token;
+
+    // Determina o ponto de partida: raiz para caminhos absolutos, ou o dir. atual para relativos.
+    if (caminho_mutavel[0] == '/') {
+        inode_corrente = EXT2_ROOT_INO;
+        proximo_token = strtok(caminho_mutavel, "/");
+    } else {
+        inode_corrente = inode_dir_atual;
+        proximo_token = strtok(caminho_mutavel, "/");
+    }
+
+    // Loop de navegação: itera por cada parte do caminho (ex: "home", "user", "doc.txt")
+    while (proximo_token != NULL) {
+        // Usa nossa função auxiliar para encontrar a próxima parte do caminho no diretório corrente
+        uint32_t proximo_inode = procurar_entrada_no_diretorio(fd, sb, gdt, inode_corrente, proximo_token);
+        
+        if (proximo_inode == 0) {
+            // Se não encontrou o componente, o caminho é inválido.
+            return 0;
+        }
+        
+        // Atualiza o inode corrente e pega o próximo token
+        inode_corrente = proximo_inode;
+        proximo_token = strtok(NULL, "/");
+    }
+
+    // O inode_corrente agora contém o inode do alvo final.
+    return inode_corrente;
+}
+
+
+
+/**
+ * @brief Formata o campo i_mode de um inode em uma string de permissões no estilo "ls -l".
+ * * @param mode O valor do campo i_mode.
+ * @param buffer O buffer de caracteres onde a string formatada será armazenada (deve ter pelo menos 11 bytes).
+ */
+void formatar_permissoes(uint16_t mode, char* buffer) {
+    // Primeiro caractere: tipo do arquivo
+    if (EXT2_IS_DIR(mode))  buffer[0] = 'd';
+    else if (EXT2_IS_LNK(mode)) buffer[0] = 'l';
+    else if (EXT2_IS_REG(mode)) buffer[0] = '-'; // O padrão Unix é '-'. O 'f' do seu professor é uma variação.
+    else buffer[0] = '?';
+
+    // Permissões do Dono (user)
+    buffer[1] = (mode & EXT2_S_IRUSR) ? 'r' : '-';
+    buffer[2] = (mode & EXT2_S_IWUSR) ? 'w' : '-';
+    buffer[3] = (mode & EXT2_S_IXUSR) ? 'x' : '-';
+    
+    // Permissões do Grupo (group)
+    buffer[4] = (mode & EXT2_S_IRGRP) ? 'r' : '-';
+    buffer[5] = (mode & EXT2_S_IWGRP) ? 'w' : '-';
+    buffer[6] = (mode & EXT2_S_IXGRP) ? 'x' : '-';
+
+    // Permissões de Outros (others)
+    buffer[7] = (mode & EXT2_S_IROTH) ? 'r' : '-';
+    buffer[8] = (mode & EXT2_S_IWOTH) ? 'w' : '-';
+    buffer[9] = (mode & EXT2_S_IXOTH) ? 'x' : '-';
+    
+    // Terminador nulo
+    buffer[10] = '\0';
+}
+
+/**
+ * @brief Converte um tamanho em bytes para um formato legível por humanos (B, KiB, MiB, GiB).
+ * * @param tamanho_bytes O tamanho do arquivo em bytes.
+ * @param buffer O buffer de caracteres onde a string formatada será armazenada (deve ter pelo menos 20 bytes).
+ */
+void formatar_tamanho_humano(uint32_t tamanho_bytes, char* buffer, size_t buffer_size) {
+    const double GIB = 1024.0 * 1024.0 * 1024.0;
+    const double MIB = 1024.0 * 1024.0;
+    const double KIB = 1024.0;
+
+    if (tamanho_bytes >= GIB) {
+        snprintf(buffer, buffer_size, "%.1f GiB", tamanho_bytes / GIB);
+    } else if (tamanho_bytes >= MIB) {
+        snprintf(buffer, buffer_size, "%.1f MiB", tamanho_bytes / MIB);
+    } else if (tamanho_bytes >= KIB) {
+        snprintf(buffer, buffer_size, "%.1f KiB", tamanho_bytes / KIB);
+    } else {
+        snprintf(buffer, buffer_size, "%u B", tamanho_bytes);
+    }
+}
+
+
+
+/**
+ * @brief Imprime os atributos de um inode em um formato de linha única, legível para o usuário.
+ * * @param ino Um ponteiro para o inode cujos atributos serão impressos.
+ */
+void imprimir_formato_attr(const inode* ino) {
+    if (!ino) return;
+
+    char perm_buffer[11];
+    char tamanho_buffer[20];
+    char data_buffer[20];
+
+    // Formata cada parte da informação
+    formatar_permissoes(ino->mode, perm_buffer);
+    formatar_tamanho_humano(ino->size, tamanho_buffer, sizeof(tamanho_buffer));
+    
+    time_t mtime = ino->mtime;
+    strftime(data_buffer, sizeof(data_buffer), "%d/%m/%Y %H:%M", localtime(&mtime));
+
+    // Imprime o cabeçalho e a linha de dados formatada
+    printf("%-10s %-4s %-4s %-10s %s\n", "permissões", "uid", "gid", "tamanho", "modificado em");
+    printf("%-10s %-4u %-4u %-10s %s\n",
+           perm_buffer,
+           ino->uid,
+           ino->gid,
+           tamanho_buffer,
+           data_buffer);
+}
+
+
+
+/**
+ * @brief (Função Auxiliar Estática) Copia um único bloco de dados para o buffer de conteúdo principal.
+ *
+ * Esta função é chamada repetidamente para ler um bloco de dados e anexá-lo ao
+ * buffer que está sendo montado, atualizando os ponteiros e contadores necessários.
+ *
+ * @param fd O descritor de arquivo.
+ * @param sb O superbloco.
+ * @param num_bloco O número do bloco de dados a ser lido.
+ * @param file_ino O inode do arquivo (usado para checar o tamanho total).
+ * @param ptr_buffer_atual_ptr Ponteiro para o ponteiro do buffer de conteúdo (para que possamos movê-lo).
+ * @param bytes_lidos_ptr Ponteiro para o contador de bytes lidos (para que possamos incrementá-lo).
+ * @param bloco_dado_temp Um buffer temporário pré-alocado para a leitura do bloco.
+ * @return 0 em sucesso, -1 em erro.
+ */
+static int copiar_bloco_de_dados(int fd, const superbloco* sb, uint32_t num_bloco,
+                                 const inode* file_ino, char** ptr_buffer_atual_ptr,
+                                 uint32_t* bytes_lidos_ptr, char* bloco_dado_temp) {
+    if (num_bloco == 0 || *bytes_lidos_ptr >= file_ino->size) {
+        return 0; // Pula blocos não alocados ou se já lemos o arquivo inteiro
+    }
+    
+    if (ler_bloco(fd, sb, num_bloco, bloco_dado_temp) != 0) {
+        fprintf(stderr, "Erro ao ler o bloco de dados %u.\n", num_bloco);
+        return -1; // Retorna erro
+    }
+
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t bytes_para_copiar = tamanho_bloco;
+
+    if (*bytes_lidos_ptr + tamanho_bloco > file_ino->size) {
+        bytes_para_copiar = file_ino->size - *bytes_lidos_ptr;
+    }
+
+    memcpy(*ptr_buffer_atual_ptr, bloco_dado_temp, bytes_para_copiar);
+    
+    // Atualiza os contadores usando os ponteiros
+    *bytes_lidos_ptr += bytes_para_copiar;
+    *ptr_buffer_atual_ptr += bytes_para_copiar;
+    
+    return 0; // Sucesso
+}
+
+/**
+ * @brief Lê o conteúdo completo de um arquivo, lidando com blocos diretos e indiretos,
+ * para um buffer de memória.
+ *
+ * @param fd O descritor de arquivo.
+ * @param sb O superbloco.
+ * @param file_ino Um ponteiro para o inode JÁ LIDO do arquivo a ser lido.
+ * @return Um ponteiro para um buffer de memória alocado dinamicamente contendo o
+ * conteúdo do arquivo. O chamador é RESPONSÁVEL por liberar esta memória com free().
+ * Retorna NULL em caso de erro.
+ */
+char* ler_conteudo_arquivo(int fd, const superbloco* sb, const inode* file_ino) {
+    if (!file_ino) return NULL;
+    if (file_ino->size == 0) {
+        char* buffer_vazio = malloc(1);
+        if (buffer_vazio) buffer_vazio[0] = '\0';
+        return buffer_vazio;
+    }
+
+    char* buffer_conteudo = malloc(file_ino->size + 1);
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    char* bloco_dado_temp = malloc(tamanho_bloco);
+    uint32_t* bloco_ponteiros_temp = malloc(tamanho_bloco);
+
+    if (!buffer_conteudo || !bloco_dado_temp || !bloco_ponteiros_temp) {
+        perror("Erro (ler_conteudo): Falha ao alocar buffers");
+        free(buffer_conteudo); free(bloco_dado_temp); free(bloco_ponteiros_temp);
+        return NULL;
+    }
+
+    uint32_t bytes_lidos = 0;
+    char* ptr_buffer_atual = buffer_conteudo;
+    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
+
+    // 1. Blocos Diretos (0 a 11)
+    for (int i = 0; i < 12; ++i) {
+        if (copiar_bloco_de_dados(fd, sb, file_ino->block[i], file_ino, &ptr_buffer_atual, &bytes_lidos, bloco_dado_temp) != 0) goto erro;
+    }
+
+    // 2. Bloco de Indireção Simples (12)
+    if (bytes_lidos < file_ino->size && file_ino->block[12] != 0) {
+        if (ler_bloco(fd, sb, file_ino->block[12], bloco_ponteiros_temp) == 0) {
+            for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
+                if (copiar_bloco_de_dados(fd, sb, bloco_ponteiros_temp[i], file_ino, &ptr_buffer_atual, &bytes_lidos, bloco_dado_temp) != 0) goto erro;
+            }
+        }
+    }
+
+    // 3. Bloco de Indireção Dupla (13)
+    if (bytes_lidos < file_ino->size && file_ino->block[13] != 0) {
+        if (ler_bloco(fd, sb, file_ino->block[13], bloco_ponteiros_temp) == 0) {
+            for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
+                if (bloco_ponteiros_temp[i] == 0) continue;
+                uint32_t* bloco_L2 = malloc(tamanho_bloco);
+                if (bloco_L2 && ler_bloco(fd, sb, bloco_ponteiros_temp[i], bloco_L2) == 0) {
+                    for (uint32_t j = 0; j < ponteiros_por_bloco; ++j) {
+                        if (copiar_bloco_de_dados(fd, sb, bloco_L2[j], file_ino, &ptr_buffer_atual, &bytes_lidos, bloco_dado_temp) != 0) { free(bloco_L2); goto erro; }
+                    }
+                }
+                free(bloco_L2);
+            }
+        }
+    }
+
+    // 4. Bloco de Indireção Tripla (14)
+    if (bytes_lidos < file_ino->size && file_ino->block[14] != 0) {
+        // Lê o bloco de ponteiros de Nível 1 (L1)
+        if (ler_bloco(fd, sb, file_ino->block[14], bloco_ponteiros_temp) == 0) {
+            // Itera sobre os ponteiros L1
+            for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
+                if (bytes_lidos >= file_ino->size) break;
+                if (bloco_ponteiros_temp[i] == 0) continue;
+
+                // Aloca memória e lê o bloco de ponteiros de Nível 2 (L2)
+                uint32_t* bloco_ponteiros_L2 = malloc(tamanho_bloco);
+                if (bloco_ponteiros_L2 && ler_bloco(fd, sb, bloco_ponteiros_temp[i], bloco_ponteiros_L2) == 0) {
+                    // Itera sobre os ponteiros L2
+                    for (uint32_t j = 0; j < ponteiros_por_bloco; ++j) {
+                        if (bytes_lidos >= file_ino->size) break;
+                        if (bloco_ponteiros_L2[j] == 0) continue;
+
+                        // Aloca memória e lê o bloco de ponteiros de Nível 3 (L3), que aponta para os dados
+                        uint32_t* bloco_ponteiros_L3 = malloc(tamanho_bloco);
+                        if (bloco_ponteiros_L3 && ler_bloco(fd, sb, bloco_ponteiros_L2[j], bloco_ponteiros_L3) == 0) {
+                            // Itera sobre os ponteiros L3, que são os blocos de dados finais
+                            for (uint32_t k = 0; k < ponteiros_por_bloco; ++k) {
+                                if (bytes_lidos >= file_ino->size) break;
+                                // Chama a função auxiliar para copiar o bloco de dados
+                                if (copiar_bloco_de_dados(fd, sb, bloco_ponteiros_L3[k], file_ino, &ptr_buffer_atual, &bytes_lidos, bloco_dado_temp) != 0) {
+                                    free(bloco_ponteiros_L2);
+                                    free(bloco_ponteiros_L3);
+                                    goto erro; // Pula para a limpeza em caso de falha
+                                }
+                            }
+                        }
+                        free(bloco_ponteiros_L3); // Libera o buffer L3
+                    }
+                }
+                free(bloco_ponteiros_L2); // Libera o buffer L2
+            }
+        }
+    }
+
+    // Adiciona o terminador nulo ao final do conteúdo.
+    *ptr_buffer_atual = '\0';
+    free(bloco_dado_temp);
+    free(bloco_ponteiros_temp);
+    return buffer_conteudo;
+
+erro:
+// Limpeza em caso de falha em qualquer uma das etapas
+    free(buffer_conteudo);
+    free(bloco_dado_temp);
+    free(bloco_ponteiros_temp);
+    return NULL;
+}
+
+
+
+/**
+ * @brief Imprime um resumo formatado e amigável das informações do sistema de arquivos.
+ *
+ * @param sb Um ponteiro para o superbloco.
+ * @param num_grupos O número total de grupos no sistema de arquivos.
+ */
+void imprimir_formato_info(const superbloco* sb, uint32_t num_grupos) {
+    if (!sb) return;
+
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint64_t tamanho_imagem = (uint64_t)sb->blocks_count * tamanho_bloco;
+    uint32_t espaco_livre_kib = ((uint64_t)sb->free_blocks_count * tamanho_bloco) / 1024;
+    uint16_t tamanho_inode = obter_tamanho_inode(sb);
+    uint32_t tamanho_tabela_inodes_por_grupo = (sb->inodes_per_group * tamanho_inode) / tamanho_bloco;
+
+    // Imprime o nome do volume, garantindo que não imprima lixo
+    char nome_volume[17];
+    strncpy(nome_volume, sb->volume_name, 16);
+    nome_volume[16] = '\0';
+    
+    printf("%-16s: %s\n", "Volume name.....", nome_volume);
+    printf("%-16s: %llu bytes\n", "Image size......", (unsigned long long)tamanho_imagem);
+    printf("%-16s: %u KiB\n", "Free space......", espaco_livre_kib);
+    printf("%-16s: %u\n", "Free inodes.....", sb->free_inodes_count);
+    printf("%-16s: %u\n", "Free blocks.....", sb->free_blocks_count);
+    printf("%-16s: %u bytes\n", "Block size......", tamanho_bloco);
+    printf("%-16s: %u bytes\n", "Inode size......", tamanho_inode);
+    printf("%-16s: %u\n", "Groups count....", num_grupos);
+    printf("%-16s: %u blocks\n", "Groups size.....", sb->blocks_per_group);
+    printf("%-16s: %u inodes\n", "Groups inodes...", sb->inodes_per_group);
+    printf("%-16s: %u blocks\n", "Inodetable size.", tamanho_tabela_inodes_por_grupo);
+}
+
+
+
+/**
+ * @brief Adiciona uma nova entrada de diretório a um diretório pai. (VERSÃO COMPLETA)
+ *
+ * Procura espaço nos blocos existentes (diretos). Se não encontrar, tenta alocar um novo
+ * bloco de dados, primeiro nos ponteiros diretos e depois no bloco de indireção simples.
+ *
+ * IMPORTANTE: Modifica 'inode_pai' em memória. O chamador DEVE escrevê-lo de volta ao disco.
+ * @return 0 em sucesso, -1 em erro.
+ */
+int adicionar_entrada_diretorio(int fd, superbloco* sb, group_desc* gdt, inode* inode_pai, uint32_t inode_pai_num, uint32_t inode_filho, const char* nome_filho, uint8_t tipo_arquivo) {
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    char* buffer_dados = malloc(tamanho_bloco);
+    if (!buffer_dados) {
+        perror("adicionar_entrada: falha ao alocar buffer de dados");
+        return -1;
+    }
+
+    uint16_t rec_len_necessario = (sizeof(ext2_dir_entry) - EXT2_NAME_LEN + strlen(nome_filho) + 3) & ~3;
+
+    // --- FASE 1: Procurar espaço nos blocos diretos existentes ---
+    for (int i = 0; i < 12; ++i) {
+        if (inode_pai->block[i] == 0) continue;
+        if (ler_bloco(fd, sb, inode_pai->block[i], buffer_dados) != 0) continue;
+
+        uint32_t offset = 0;
+        ext2_dir_entry* entry;
+        while (offset < tamanho_bloco) {
+            entry = (ext2_dir_entry*)(buffer_dados + offset);
+            if (entry->rec_len == 0 || (offset + entry->rec_len > tamanho_bloco) ) break;
+
+            uint16_t rec_len_real_atual = (sizeof(ext2_dir_entry) - EXT2_NAME_LEN + entry->name_len + 3) & ~3;
+            if ((entry->rec_len - rec_len_real_atual) >= rec_len_necessario) {
+                uint16_t rec_len_antigo = entry->rec_len;
+                entry->rec_len = rec_len_real_atual;
+
+                offset += entry->rec_len;
+                ext2_dir_entry *nova_entry = (ext2_dir_entry*)(buffer_dados + offset);
+                nova_entry->inode = inode_filho;
+                nova_entry->name_len = strlen(nome_filho);
+                nova_entry->rec_len = rec_len_antigo - entry->rec_len;
+                nova_entry->file_type = tipo_arquivo;
+                strncpy(nova_entry->name, nome_filho, nova_entry->name_len);
+
+                escrever_bloco(fd, sb, inode_pai->block[i], buffer_dados);
+                free(buffer_dados);
+                return 0; // SUCESSO!
+            }
+            offset += entry->rec_len;
+        }
+    }
+
+    // --- FASE 2: Não havia espaço. Tenta alocar um novo bloco em um ponteiro direto livre ---
+    for (int i = 0; i < 12; i++) {
+        if (inode_pai->block[i] == 0) {
+            uint32_t novo_bloco_num = alocar_bloco(fd, sb, gdt, inode_pai_num);
+            if (novo_bloco_num == 0) { free(buffer_dados); return -1; }
+
+            inode_pai->block[i] = novo_bloco_num;
+            inode_pai->blocks += (tamanho_bloco / 512);
+            inode_pai->size += tamanho_bloco;
+
+            memset(buffer_dados, 0, tamanho_bloco);
+            ext2_dir_entry* nova_entry = (ext2_dir_entry*)buffer_dados;
+            nova_entry->inode = inode_filho;
+            nova_entry->name_len = strlen(nome_filho);
+            nova_entry->rec_len = tamanho_bloco;
+            nova_entry->file_type = tipo_arquivo;
+            strncpy(nova_entry->name, nome_filho, nova_entry->name_len);
+
+            escrever_bloco(fd, sb, novo_bloco_num, buffer_dados);
+            free(buffer_dados);
+            return 0; // SUCESSO!
+        }
+    }
+
+    // --- FASE 3: Ponteiros diretos estão cheios. Lida com o bloco de indireção simples (block[12]) ---
+    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
+    uint32_t* buffer_ponteiros = malloc(tamanho_bloco);
+    if(!buffer_ponteiros) {
+        perror("adicionar_entrada: falha ao alocar buffer de ponteiros");
+        free(buffer_dados);
+        return -1;
+    }
+
+    if (inode_pai->block[12] == 0) {
+        // O bloco de indireção ainda não existe. Precisamos criá-lo.
+        uint32_t num_bloco_indireto = alocar_bloco(fd, sb, gdt, inode_pai_num);
+        if (num_bloco_indireto == 0) { free(buffer_dados); free(buffer_ponteiros); return -1; }
+        
+        uint32_t num_bloco_dados_novo = alocar_bloco(fd, sb, gdt, inode_pai_num);
+        if (num_bloco_dados_novo == 0) {
+            liberar_bloco(fd, sb, gdt, num_bloco_indireto); // Rollback
+            free(buffer_dados); free(buffer_ponteiros); return -1;
+        }
+        
+        // Atualiza o inode pai para apontar para o novo bloco de indireção
+        inode_pai->block[12] = num_bloco_indireto;
+        inode_pai->blocks += (tamanho_bloco / 512); // Conta o bloco de indireção
+        
+        // Prepara e escreve o bloco de indireção
+        memset(buffer_ponteiros, 0, tamanho_bloco);
+        buffer_ponteiros[0] = num_bloco_dados_novo; // O primeiro ponteiro aponta para novo bloco de dados
+        escrever_bloco(fd, sb, num_bloco_indireto, buffer_ponteiros);
+        
+        // Agora, prepara e escreve o novo bloco de dados (mesma lógica da FASE 2)
+        inode_pai->blocks += (tamanho_bloco / 512);
+        inode_pai->size += tamanho_bloco;
+        
+        memset(buffer_dados, 0, tamanho_bloco);
+        ext2_dir_entry* nova_entry = (ext2_dir_entry*)buffer_dados;
+        nova_entry->inode = inode_filho;
+        nova_entry->name_len = strlen(nome_filho);
+        nova_entry->rec_len = tamanho_bloco;
+        nova_entry->file_type = tipo_arquivo;
+        strncpy(nova_entry->name, nome_filho, nova_entry->name_len);
+
+        escrever_bloco(fd, sb, num_bloco_dados_novo, buffer_dados);
+
+    } else {
+        // O bloco de indireção já existe. Procura um ponteiro livre dentro dele.
+        ler_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros);
+        for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
+            if (buffer_ponteiros[i] == 0) {
+                uint32_t num_bloco_dados_novo = alocar_bloco(fd, sb, gdt, inode_pai_num);
+                if (num_bloco_dados_novo == 0) { free(buffer_dados); free(buffer_ponteiros); return -1; }
+
+                // Encontrou um slot! Atualiza o bloco de ponteiros
+                buffer_ponteiros[i] = num_bloco_dados_novo;
+                escrever_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros);
+                
+                // Prepara e escreve o novo bloco de dados
+                inode_pai->blocks += (tamanho_bloco / 512);
+                inode_pai->size += tamanho_bloco;
+
+                memset(buffer_dados, 0, tamanho_bloco);
+                ext2_dir_entry* nova_entry = (ext2_dir_entry*)buffer_dados;
+                nova_entry->inode = inode_filho;
+                nova_entry->name_len = strlen(nome_filho);
+                nova_entry->rec_len = tamanho_bloco;
+                nova_entry->file_type = tipo_arquivo;
+                strncpy(nova_entry->name, nome_filho, nova_entry->name_len);
+                
+                escrever_bloco(fd, sb, num_bloco_dados_novo, buffer_dados);
+                
+                free(buffer_dados);
+                free(buffer_ponteiros);
+                return 0; // SUCESSO!
+            }
+        }
+        // Se o loop terminar, o bloco de indireção simples está cheio.
+        fprintf(stderr, "Erro: Não há espaço no diretório (bloco de indireção simples cheio).\n");
+        free(buffer_dados);
+        free(buffer_ponteiros);
+        return -1;
+    }
+
+    free(buffer_dados);
+    free(buffer_ponteiros);
+    return 0; // Sucesso se saiu da criação do bloco de indireção
+}
+
+
+
+/*
+ * =================================================================================
+ * Funções de Alocação de Bloco de Dados
+ * =================================================================================
+ */
+
+/**
+ * @brief Aloca um bloco de dados livre no sistema de arquivos.
+ *
+ * Tenta alocar um bloco no mesmo grupo do inode fornecido para otimizar o
+ * posicionamento dos dados (localidade). Se não houver espaço, procura em
+ * outros grupos.
+ *
+ * @param fd O descritor de arquivo.
+ * @param sb O superbloco (será modificado).
+ * @param gdt A tabela de descritores de grupo (será modificada).
+ * @param inode_num O número do inode que possuirá este bloco (usado como dica de localidade).
+ * @return O número do bloco alocado em caso de sucesso, 0 em caso de falha.
+ */
+uint32_t alocar_bloco(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_num) {
+    if (sb->free_blocks_count == 0) {
+        fprintf(stderr, "Erro (alocar_bloco): Não há blocos livres no sistema de arquivos.\n");
+        return 0;
+    }
+
+    uint32_t num_grupos = (sb->blocks_count + sb->blocks_per_group - 1) / sb->blocks_per_group;
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    unsigned char* bitmap_buffer = malloc(tamanho_bloco);
+    if (!bitmap_buffer) {
+        perror("Erro (alocar_bloco): Falha ao alocar buffer para o bitmap");
+        return 0;
+    }
+
+    // Estratégia de alocação:
+    // 1. Tentar alocar no mesmo grupo do inode.
+    uint32_t grupo_ideal = (inode_num - 1) / sb->inodes_per_group;
+    if (gdt[grupo_ideal].free_blocks_count > 0) {
+        if (ler_bloco(fd, sb, gdt[grupo_ideal].block_bitmap, bitmap_buffer) == 0) {
+            for (uint32_t i = 0; i < sb->blocks_per_group; ++i) {
+                if (!bit_esta_setado(bitmap_buffer, i)) {
+                    setar_bit(bitmap_buffer, i);
+                    escrever_bloco(fd, sb, gdt[grupo_ideal].block_bitmap, bitmap_buffer);
+                    sb->free_blocks_count--;
+                    gdt[grupo_ideal].free_blocks_count--;
+                    escrever_superbloco(fd, sb);
+                    escrever_descritor_grupo(fd, sb, grupo_ideal, &gdt[grupo_ideal]);
+                    free(bitmap_buffer);
+                    // Calcula o número absoluto do bloco
+                    return (grupo_ideal * sb->blocks_per_group) + sb->first_data_block + i;
+                }
+            }
+        }
+    }
+
+    // 2. Se não deu certo, procurar em qualquer outro grupo.
+    for (uint32_t i = 0; i < num_grupos; ++i) {
+        if (gdt[i].free_blocks_count > 0) {
+            if (ler_bloco(fd, sb, gdt[i].block_bitmap, bitmap_buffer) != 0) continue;
+            for (uint32_t j = 0; j < sb->blocks_per_group; ++j) {
+                if (!bit_esta_setado(bitmap_buffer, j)) {
+                    setar_bit(bitmap_buffer, j);
+                    escrever_bloco(fd, sb, gdt[i].block_bitmap, bitmap_buffer);
+                    sb->free_blocks_count--;
+                    gdt[i].free_blocks_count--;
+                    escrever_superbloco(fd, sb);
+                    escrever_descritor_grupo(fd, sb, i, &gdt[i]);
+                    free(bitmap_buffer);
+                    return (i * sb->blocks_per_group) + sb->first_data_block + j;
+                }
+            }
+        }
+    }
+    
+    free(bitmap_buffer);
+    fprintf(stderr, "Erro (alocar_bloco): Inconsistência! Superbloco indica blocos livres, mas nenhum foi encontrado.\n");
+    return 0;
+}
+
+
+/**
+ * @brief Libera um bloco de dados, marcando-o como livre no bitmap.
+ *
+ * @param fd O descritor de arquivo.
+ * @param sb O superbloco (será modificado).
+ * @param gdt A tabela de descritores de grupo (será modificada).
+ * @param num_bloco O número do bloco a ser liberado.
+ * @return 0 em sucesso, -1 em erro.
+ */
+int liberar_bloco(int fd, superbloco* sb, group_desc* gdt, uint32_t num_bloco) {
+    if (num_bloco < sb->first_data_block || num_bloco >= sb->blocks_count) {
+        fprintf(stderr, "Erro (liberar_bloco): Tentativa de liberar um bloco de dados inválido: %u\n", num_bloco);
+        return -1;
+    }
+
+    uint32_t grupo_idx = (num_bloco - sb->first_data_block) / sb->blocks_per_group;
+    uint32_t indice_no_bitmap = (num_bloco - sb->first_data_block) % sb->blocks_per_group;
+    
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    unsigned char* bitmap_buffer = malloc(tamanho_bloco);
+    if (!bitmap_buffer) {
+        perror("Erro (liberar_bloco): Falha ao alocar buffer para o bitmap");
+        return -1;
+    }
+
+    if (ler_bloco(fd, sb, gdt[grupo_idx].block_bitmap, bitmap_buffer) != 0) {
+        fprintf(stderr, "Erro (liberar_bloco): Falha ao ler o bitmap de blocos do grupo %u.\n", grupo_idx);
+        free(bitmap_buffer);
+        return -1;
+    }
+
+    if (!bit_esta_setado(bitmap_buffer, indice_no_bitmap)) {
+        fprintf(stderr, "Aviso (liberar_bloco): Bloco %u já estava livre.\n", num_bloco);
+        free(bitmap_buffer);
+        return 0;
+    }
+
+    limpar_bit(bitmap_buffer, indice_no_bitmap);
+
+    if (escrever_bloco(fd, sb, gdt[grupo_idx].block_bitmap, bitmap_buffer) != 0) {
+        fprintf(stderr, "Erro (liberar_bloco): Falha ao escrever o bitmap de blocos atualizado.\n");
+        free(bitmap_buffer);
+        return -1;
+    }
+
+    sb->free_blocks_count++;
+    gdt[grupo_idx].free_blocks_count++;
+    
+    escrever_superbloco(fd, sb);
+    escrever_descritor_grupo(fd, sb, grupo_idx, &gdt[grupo_idx]);
+
+    free(bitmap_buffer);
+    return 0; // Sucesso
+}
+
+/**
+ * @brief (Função Auxiliar Estática) Procura e remove uma entrada em um único bloco de diretório.
+ * @return 1 se a entrada foi removida, 0 se não foi encontrada, -1 em erro.
+ */
+static int remover_entrada_em_bloco(int fd, const superbloco* sb, uint32_t num_bloco, const char* nome_filho) {
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    char* buffer = malloc(tamanho_bloco);
+    if (!buffer) return -1;
+
+    if (ler_bloco(fd, sb, num_bloco, buffer) != 0) {
+        free(buffer);
+        return -1;
+    }
+
+    uint32_t offset = 0;
+    size_t tam_nome_filho = strlen(nome_filho);
+    ext2_dir_entry* entry_anterior = NULL;
+
+    while (offset < tamanho_bloco) {
+        ext2_dir_entry* entry_atual = (ext2_dir_entry*)(buffer + offset);
+        if (entry_atual->rec_len == 0) break;
+
+        if (entry_atual->inode != 0 && entry_atual->name_len == tam_nome_filho &&
+            strncmp(entry_atual->name, nome_filho, tam_nome_filho) == 0) {
+            
+            if (entry_anterior != NULL) {
+                entry_anterior->rec_len += entry_atual->rec_len;
+            } else {
+                entry_atual->inode = 0;
+            }
+
+            escrever_bloco(fd, sb, num_bloco, buffer);
+            free(buffer);
+            return 1; // Encontrado e removido!
+        }
+        entry_anterior = entry_atual;
+        offset += entry_atual->rec_len;
+    }
+    
+    free(buffer);
+    return 0; // Não encontrado neste bloco
+}
+
+
+/**
+ * @brief Remove uma entrada de um diretório pai, procurando nos blocos diretos e indiretos.
+ * @return 0 em sucesso, -1 em erro.
+ */
+int remover_entrada_diretorio(int fd, superbloco* sb, inode* inode_pai, const char* nome_filho) {
+    int status = 0;
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
+    uint32_t* buffer_ponteiros = malloc(tamanho_bloco);
+    if (!buffer_ponteiros) {
+        perror("remover_entrada: falha ao alocar buffer");
+        return -1;
+    }
+
+    // 1. Procura nos blocos diretos
+    for (int i = 0; i < 12; i++) {
+        if (inode_pai->block[i] == 0) continue;
+        status = remover_entrada_em_bloco(fd, sb, inode_pai->block[i], nome_filho);
+        if (status != 0) goto cleanup; // Se encontrou (1) ou deu erro (-1), termina.
+    }
+
+    // 2. Procura no bloco de indireção simples
+    if (inode_pai->block[12] != 0) {
+        if (ler_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros) == 0) {
+            for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
+                if (buffer_ponteiros[i] == 0) continue;
+                status = remover_entrada_em_bloco(fd, sb, buffer_ponteiros[i], nome_filho);
+                if (status != 0) goto cleanup;
+            }
+        }
+    }
+
+    // 3. Procura no bloco de indireção dupla
+    if (inode_pai->block[13] != 0) {
+        if (ler_bloco(fd, sb, inode_pai->block[13], buffer_ponteiros) == 0) { // Lê L1
+            for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
+                if (buffer_ponteiros[i] == 0) continue;
+                uint32_t* bloco_L2 = malloc(tamanho_bloco);
+                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê L2
+                    for (uint32_t j = 0; j < ponteiros_por_bloco; j++) {
+                        if (bloco_L2[j] == 0) continue;
+                        status = remover_entrada_em_bloco(fd, sb, bloco_L2[j], nome_filho);
+                        if (status != 0) { free(bloco_L2); goto cleanup; }
+                    }
+                }
+                free(bloco_L2);
+            }
+        }
+    }
+
+cleanup:
+    free(buffer_ponteiros);
+    return (status == 1) ? 0 : -1; // Retorna 0 para sucesso, -1 se não encontrou ou deu erro.
 }
