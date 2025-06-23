@@ -6,14 +6,15 @@
  * um shell simples para interagir com o sistema de arquivos através de comandos
  * como 'info', 'help' e 'exit'.
  *
- * Data de criação: 10 de junho de 2024
+ * Data de criação: 24 de abril de 2025
+ * Data de atualização: 23 de junho de 2025
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h> // Para close()
-#include <fcntl.h>  // Para open()
+#include <unistd.h> 
+#include <fcntl.h>  
 
 #include "headers.h"
 #include "commands.h"
@@ -152,7 +153,7 @@ int main(int argc, char *argv[]) {
         else if (strcmp(comando, "pwd") == 0){
             comando_pwd(diretorio_atual_str);
         }
-        
+
         else if (strcmp(comando, "touch") == 0) {
             char* caminho_arg = strtok(NULL, " \t\n\r");
             comando_touch(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
@@ -162,6 +163,16 @@ int main(int argc, char *argv[]) {
         else if (strcmp(comando, "rm") == 0) {
             char* caminho_arg = strtok(NULL, " \t\n\r");
             comando_rm(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+        }
+
+        else if (strcmp(comando, "mkdir") == 0) {
+            char* caminho_arg = strtok(NULL, " \t\n\r");
+            comando_mkdir(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+        }
+
+        else if (strcmp(comando, "rmdir") == 0){
+            char* caminho_arg = strtok(NULL, " \t\n\r");
+            comando_rmdir(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
         }
 
         else if (strcmp(comando, "help") == 0) {

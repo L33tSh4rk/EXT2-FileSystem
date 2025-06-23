@@ -34,5 +34,10 @@ void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
 // --- rm ---
 void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg);
 
+// --- mkdir ---
+void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg);
+
+// --- rmdir ---
+void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg);
 
 #endif

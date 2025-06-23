@@ -6,7 +6,6 @@
  * como o superbloco e os descritores de grupo. Ele serve como a camada de abstração
  * entre o shell e o disco (imagem do sistema de arquivos).
  *
- * Baseado nos protótipos de headers.h e inspirado na lógica de um shell Ext2 completo.
  */
 
 #include <stdio.h>
@@ -374,8 +373,6 @@ void liberar_descritores_grupo(group_desc* gdt) {
     }
 }
 
-
-#include <time.h> // Necessário para a função print_inode
 
 /*
  * =================================================================================
@@ -1790,4 +1787,110 @@ int remover_entrada_diretorio(int fd, superbloco* sb, inode* inode_pai, const ch
 cleanup:
     free(buffer_ponteiros);
     return (status == 1) ? 0 : -1; // Retorna 0 para sucesso, -1 se não encontrou ou deu erro.
+}
+
+
+
+
+/**
+ * @brief (Função Auxiliar Estática) Verifica se um único bloco de diretório contém entradas além de '.' e '..'.
+ * @param num_bloco O número do bloco de dados a ser verificado.
+ * @return 1 se encontrar outras entradas, 0 se estiver "limpo", -1 em erro de leitura.
+ */
+static int bloco_dir_contem_entradas(int fd, const superbloco* sb, uint32_t num_bloco, char* buffer) {
+    if (num_bloco == 0) return 0; // Bloco não alocado é considerado limpo.
+    if (ler_bloco(fd, sb, num_bloco, buffer) != 0) return -1; // Erro
+
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t offset = 0;
+
+    while (offset < tamanho_bloco) {
+        ext2_dir_entry* entry = (ext2_dir_entry*)(buffer + offset);
+        if (entry->rec_len == 0) break;
+        
+        if (entry->inode != 0) {
+            // Se o nome não for "." E não for "..", encontramos um arquivo/dir.
+            if (strncmp(entry->name, ".", entry->name_len) != 0 || entry->name_len != 1) {
+                if (strncmp(entry->name, "..", entry->name_len) != 0 || entry->name_len != 2) {
+                    return 1; // Encontrou uma entrada, portanto não está vazio.
+                }
+            }
+        }
+        if (offset + entry->rec_len >= tamanho_bloco) break;
+        offset += entry->rec_len;
+    }
+
+    return 0; // Nenhuma entrada além de . e .. foi encontrada neste bloco.
+}
+
+
+/**
+ * @brief Verifica se um diretório está vazio (contém apenas '.' e '..'), 
+ * varrendo todos os seus blocos de dados diretos, indiretos simples e duplos.
+ *
+ * @param fd Descritor de arquivo.
+ * @param sb Superbloco.
+ * @param dir_ino Ponteiro para o inode do diretório a ser verificado.
+ * @return 1 se estiver vazio, 0 se não estiver, -1 em erro.
+ */
+int diretorio_esta_vazio(int fd, const superbloco* sb, const inode* dir_ino) {
+    if (!dir_ino || !EXT2_IS_DIR(dir_ino->mode)) return -1;
+
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
+    char* buffer_dados = malloc(tamanho_bloco);
+    uint32_t* buffer_ponteiros = malloc(tamanho_bloco);
+
+    if (!buffer_dados || !buffer_ponteiros) {
+        perror("diretorio_esta_vazio: falha ao alocar buffers");
+        free(buffer_dados); free(buffer_ponteiros);
+        return -1;
+    }
+
+    int status_busca = 0;
+
+    // 1. Verifica os blocos diretos
+    for (int i = 0; i < 12; i++) {
+        status_busca = bloco_dir_contem_entradas(fd, sb, dir_ino->block[i], buffer_dados);
+        if (status_busca != 0) goto cleanup; // Se encontrou (1) ou deu erro (-1), para a busca.
+    }
+
+    // 2. Verifica o bloco de indireção simples
+    if (dir_ino->block[12] != 0) {
+        if (ler_bloco(fd, sb, dir_ino->block[12], buffer_ponteiros) == 0) {
+            for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
+                status_busca = bloco_dir_contem_entradas(fd, sb, buffer_ponteiros[i], buffer_dados);
+                if (status_busca != 0) goto cleanup;
+            }
+        }
+    }
+
+    // 3. Verifica o bloco de indireção dupla
+    if (dir_ino->block[13] != 0) {
+        if (ler_bloco(fd, sb, dir_ino->block[13], buffer_ponteiros) == 0) { // Lê L1
+            for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
+                if (buffer_ponteiros[i] == 0) continue;
+                uint32_t* bloco_L2 = malloc(tamanho_bloco);
+                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê L2
+                    for (uint32_t j = 0; j < ponteiros_por_bloco; j++) {
+                        status_busca = bloco_dir_contem_entradas(fd, sb, bloco_L2[j], buffer_dados);
+                        if (status_busca != 0) { free(bloco_L2); goto cleanup; }
+                    }
+                }
+                free(bloco_L2);
+            }
+        }
+    }
+
+    // A verificação de indireção tripla seguiria o mesmo padrão mas optamos por omitir devido raridade do uso
+
+cleanup:
+    free(buffer_dados);
+    free(buffer_ponteiros);
+    // Se status_busca for 1, significa que não está vazio, então retornamos 0.
+    // Se status_busca for 0, significa que está vazio, então retornamos 1.
+    // Se status_busca for -1 (erro), retornamos -1.
+    if (status_busca == 1) return 0; // Não está vazio
+    if (status_busca == 0) return 1; // Está vazio
+    return -1; // Erro
 }

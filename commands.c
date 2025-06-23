@@ -486,3 +486,171 @@ void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atua
 
     printf("Arquivo '%s' removido com sucesso.\n", caminho_arg);
 }
+
+
+
+/**
+ * @brief Executa a lógica do comando 'mkdir', criando um novo diretório.
+ */
+void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
+    if (caminho_arg == NULL) {
+        printf("mkdir: faltando operando\n");
+        return;
+    }
+
+    // 1. Separar caminho pai e nome do novo diretório
+    char copia_caminho1[1024], copia_caminho2[1024];
+    strncpy(copia_caminho1, caminho_arg, 1024);
+    strncpy(copia_caminho2, caminho_arg, 1024);
+    char* dir_pai_str = dirname(copia_caminho1);
+    char* nome_dir_novo = basename(copia_caminho2);
+
+    if (strlen(nome_dir_novo) > EXT2_NAME_LEN) {
+        printf("mkdir: nome do diretório é muito longo\n");
+        return;
+    }
+
+    // 2. Encontrar e validar o diretório pai
+    uint32_t inode_pai_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, dir_pai_str);
+    if (inode_pai_num == 0) {
+        printf("mkdir: diretório pai '%s' não encontrado\n", dir_pai_str);
+        return;
+    }
+    inode inode_pai;
+    if (ler_inode(fd, sb, gdt, inode_pai_num, &inode_pai) != 0 || !EXT2_IS_DIR(inode_pai.mode)) {
+        printf("mkdir: '%s' não é um diretório\n", dir_pai_str);
+        return;
+    }
+
+    // 3. Verificar se o diretório já existe
+    if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_pai_num, nome_dir_novo) != 0) {
+        printf("mkdir: não foi possível criar o diretório '%s': Arquivo já existe\n", caminho_arg);
+        return;
+    }
+
+    // 4. Alocar recursos para o novo diretório (inode E um bloco de dados)
+    uint32_t novo_dir_inode_num = alocar_inode(fd, sb, gdt);
+    if (novo_dir_inode_num == 0) {
+        printf("mkdir: falha ao alocar inode para novo diretório\n");
+        return;
+    }
+    uint32_t novo_dir_bloco_num = alocar_bloco(fd, sb, gdt, novo_dir_inode_num);
+    if (novo_dir_bloco_num == 0) {
+        printf("mkdir: falha ao alocar bloco de dados para novo diretório\n");
+        liberar_inode(fd, sb, gdt, novo_dir_inode_num); // Rollback
+        return;
+    }
+
+    // 5. Preparar o bloco de dados inicial com as entradas '.' e '..'
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    char* buffer_novo_bloco = malloc(tamanho_bloco);
+    memset(buffer_novo_bloco, 0, tamanho_bloco);
+
+    // Entrada '.' (aponta para si mesmo)
+    ext2_dir_entry* entry_dot = (ext2_dir_entry*)buffer_novo_bloco;
+    entry_dot->inode = novo_dir_inode_num;
+    entry_dot->name_len = 1;
+    entry_dot->file_type = EXT2_FT_DIR;
+    memcpy(entry_dot->name, ".", 1);
+    entry_dot->rec_len = 12;
+
+    // Entrada '..' (aponta para o pai)
+    ext2_dir_entry* entry_dotdot = (ext2_dir_entry*)(buffer_novo_bloco + entry_dot->rec_len);
+    entry_dotdot->inode = inode_pai_num;
+    entry_dotdot->name_len = 2;
+    entry_dotdot->file_type = EXT2_FT_DIR;
+    memcpy(entry_dotdot->name, "..", 2); 
+    entry_dotdot->rec_len = tamanho_bloco - entry_dot->rec_len;
+
+    escrever_bloco(fd, sb, novo_dir_bloco_num, buffer_novo_bloco);
+    free(buffer_novo_bloco);
+
+    // 6. Inicializar e escrever o inode do novo diretório
+    inode novo_dir_ino;
+    memset(&novo_dir_ino, 0, sizeof(inode));
+    novo_dir_ino.mode = EXT2_S_IFDIR | 0755; // Diretório, rwxr-xr-x
+    novo_dir_ino.size = tamanho_bloco;
+    novo_dir_ino.links_count = 2; // Começa com 2 links: '.' e a entrada no diretório pai
+    novo_dir_ino.blocks = tamanho_bloco / 512;
+    novo_dir_ino.block[0] = novo_dir_bloco_num;
+    novo_dir_ino.atime = novo_dir_ino.mtime = novo_dir_ino.ctime = time(NULL);
+    escrever_inode(fd, sb, gdt, novo_dir_inode_num, &novo_dir_ino);
+
+    // 7. Adicionar a entrada para o novo diretório no diretório pai
+    if (adicionar_entrada_diretorio(fd, sb, gdt, &inode_pai, inode_pai_num, novo_dir_inode_num, nome_dir_novo, EXT2_FT_DIR) != 0) {
+        printf("mkdir: falha ao adicionar entrada no diretório pai. Desfazendo operações...\n");
+        liberar_bloco(fd, sb, gdt, novo_dir_bloco_num);
+        liberar_inode(fd, sb, gdt, novo_dir_inode_num);
+        return;
+    }
+    
+    // 8. Atualizar o inode do diretório pai
+    inode_pai.links_count++; // A entrada '..' do novo diretório cria um novo link para o pai
+    inode_pai.mtime = time(NULL);
+    escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
+
+    printf("Diretório '%s' criado com sucesso.\n", caminho_arg);
+}
+
+
+/**
+ * @brief Executa a lógica do comando 'rmdir', removendo um diretório existente.
+ */
+void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
+    if (caminho_arg == NULL) {
+        printf("rmdir: faltando operando\n");
+        return;
+    }
+    if (strcmp(caminho_arg, ".") == 0 || strcmp(caminho_arg, "..") == 0 || strcmp(caminho_arg, "/") == 0) {
+        printf("rmdir: não é possível remover '%s': Diretório inválido ou protegido\n", caminho_arg);
+        return;
+    }
+
+    // 1. Encontra o inode do alvo e do seu pai
+    uint32_t inode_alvo_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_arg);
+    if (inode_alvo_num == 0) {
+        printf("rmdir: não foi possível remover '%s': Diretório não encontrado\n", caminho_arg);
+        return;
+    }
+    inode inode_alvo;
+    if (ler_inode(fd, sb, gdt, inode_alvo_num, &inode_alvo) != 0) return;
+    if (!EXT2_IS_DIR(inode_alvo.mode)) {
+        printf("rmdir: não foi possível remover '%s': Não é um diretório\n", caminho_arg);
+        return;
+    }
+    
+    char copia_caminho[1024];
+    strncpy(copia_caminho, caminho_arg, 1024);
+    char* nome_dir_removido = basename(copia_caminho);
+    strncpy(copia_caminho, caminho_arg, 1024);
+    char* dir_pai_str = dirname(copia_caminho);
+    uint32_t inode_pai_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, dir_pai_str);
+    inode inode_pai;
+    if (ler_inode(fd, sb, gdt, inode_pai_num, &inode_pai) != 0) return;
+
+    // 2. Verifica se o diretório está vazio
+    if (diretorio_esta_vazio(fd, sb, &inode_alvo) != 1) {
+        printf("rmdir: não foi possível remover '%s': Diretório não está vazio\n", caminho_arg);
+        return;
+    }
+
+    // 3. Remove a entrada do diretório pai
+    if (remover_entrada_diretorio(fd, sb, &inode_pai, nome_dir_removido) != 0) {
+        printf("rmdir: erro ao remover entrada do diretório pai.\n");
+        return;
+    }
+
+    // 4. Libera os recursos do diretório removido
+    liberar_bloco(fd, sb, gdt, inode_alvo.block[0]); // Diretórios vazios só têm 1 bloco
+    inode_alvo.dtime = time(NULL);
+    inode_alvo.links_count = 0; // Diretório vazio não tem mais links
+    escrever_inode(fd, sb, gdt, inode_alvo_num, &inode_alvo); // Salva o dtime e links_count
+    liberar_inode(fd, sb, gdt, inode_alvo_num);
+
+    // 5. Atualiza o inode pai
+    inode_pai.links_count--; // A entrada '..' que existia no dir removido foi-se embora
+    inode_pai.mtime = time(NULL);
+    escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
+
+    printf("Diretório '%s' removido com sucesso.\n", caminho_arg);
+}

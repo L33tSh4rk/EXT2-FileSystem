@@ -222,6 +222,7 @@ uint32_t procurar_entrada_no_diretorio(int fd, const superbloco* sb, const group
 uint32_t caminho_para_inode(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, const char* caminho);
 int adicionar_entrada_diretorio(int fd, superbloco* sb, group_desc* gdt, inode* inode_pai, uint32_t inode_pai_num, uint32_t inode_filho, const char* nome_filho, uint8_t tipo_arquivo);
 int remover_entrada_diretorio(int fd, superbloco* sb, inode* inode_pai, const char* nome_filho);
+int diretorio_esta_vazio(int fd, const superbloco* sb, const inode* dir_ino);
 
 /*Formatação*/
 void formatar_permissoes(uint16_t mode, char* buffer);
