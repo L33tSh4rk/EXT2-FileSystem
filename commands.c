@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <libgen.h> // Para a função dirname() e basename()
 #include <time.h>
+#include <stdbool.h>
+#include <stddef.h>
 
 #include "commands.h" // Inclui protótipos
 #include "headers.h"  // Inclui definições e funções de baixo nível
@@ -402,6 +404,11 @@ void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     printf("Arquivo '%s' criado com sucesso.\n", caminho_arg);
 }
 
+
+
+/**
+ * @brief Executa a lógica do comando 'rm', removendo um arquivo.
+ */
 void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
     if (caminho_arg == NULL) {
         printf("rm: faltando operando\n");
@@ -653,4 +660,159 @@ void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
 
     printf("Diretório '%s' removido com sucesso.\n", caminho_arg);
+}
+
+
+/**
+ * @brief (Função Auxiliar Estática) Procura e renomeia uma entrada em um único bloco de diretório.
+ * @return 1 se renomeado com sucesso, 0 se não encontrado, -1 em erro (ex: nome novo muito longo).
+ */
+static int renomear_entrada_em_bloco(int fd, const superbloco* sb, uint32_t num_bloco, const char* nome_antigo, const char* nome_novo) {
+    if (num_bloco == 0) return 0; // Bloco não alocado, não é um erro.
+    
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    char* buffer = malloc(tamanho_bloco);
+    if (!buffer) {
+        perror("rename (helper): falha ao alocar buffer");
+        return -1;
+    }
+
+    if (ler_bloco(fd, sb, num_bloco, buffer) != 0) {
+        free(buffer);
+        return 0;
+    }
+
+    uint32_t offset = 0;
+    size_t tam_nome_antigo = strlen(nome_antigo);
+    while (offset < tamanho_bloco) {
+        ext2_dir_entry* entry = (ext2_dir_entry*)(buffer + offset);
+        if (entry->rec_len == 0) break;
+
+        if (entry->inode != 0 && entry->name_len == tam_nome_antigo && strncmp(entry->name, nome_antigo, tam_nome_antigo) == 0) {
+            
+            // Calcula o espaço mínimo necessário para a nova entrada, de forma correta e segura.
+            uint16_t rec_len_necessario_novo = (offsetof(ext2_dir_entry, name) + strlen(nome_novo) + 3) & ~3;
+
+            if (rec_len_necessario_novo > entry->rec_len) {
+                printf("rename: falha ao renomear. O novo nome é muito longo para o espaço disponível nesta entrada.\n");
+                free(buffer);
+                return -1; // Erro, para toda a operação.
+            }
+
+            // Se couber, faz a renomeação
+            entry->name_len = strlen(nome_novo);
+            memcpy(entry->name, nome_novo, entry->name_len);
+            
+            // Limpa o resto do campo de nome para não deixar lixo do nome antigo
+            uint16_t tam_real_novo_sem_padding = offsetof(ext2_dir_entry, name) + entry->name_len;
+            if (entry->rec_len > tam_real_novo_sem_padding) {
+               memset((char*)entry + tam_real_novo_sem_padding, 0, entry->rec_len - tam_real_novo_sem_padding);
+            }
+
+            escrever_bloco(fd, sb, num_bloco, buffer);
+            free(buffer);
+            return 1; // Sucesso!
+        }
+        if (offset + entry->rec_len >= tamanho_bloco) break;
+        offset += entry->rec_len;
+    }
+    
+    free(buffer);
+    return 0; // Não encontrado neste bloco
+}
+
+
+
+/**
+ * @brief Executa a lógica do comando 'rename', renomeando um arquivo no diretório atual.
+ * Esta versão robusta procura a entrada em blocos diretos e indiretos (simples e duplos).
+ */
+void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* nome_antigo_arg, char* nome_novo_arg) {
+    // 1. Validação dos argumentos
+    if (nome_antigo_arg == NULL || nome_novo_arg == NULL) {
+        printf("Uso: rename <nome_antigo> <nome_novo>\n");
+        return;
+    }
+    if (strlen(nome_novo_arg) > EXT2_NAME_LEN) {
+        printf("rename: novo nome do arquivo é muito longo\n");
+        return;
+    }
+    if (strchr(nome_novo_arg, '/') != NULL) {
+        printf("rename: novo nome não pode conter '/'. A renomeação é apenas no diretório atual.\n");
+        return;
+    }
+    if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_dir_atual, nome_novo_arg) != 0) {
+        printf("rename: não foi possível renomear para '%s': Arquivo já existe\n", nome_novo_arg);
+        return;
+    }
+
+    // 2. Prepara buffers e variáveis para a busca
+    inode dir_ino;
+    if (ler_inode(fd, sb, gdt, inode_dir_atual, &dir_ino) != 0) return;
+
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
+    uint32_t* buffer_ponteiros = malloc(tamanho_bloco);
+
+    if (!buffer_ponteiros) {
+        perror("rename: falha ao alocar buffer de ponteiros");
+        return;
+    }
+    
+    int status_busca = 0;
+
+    // 3. Itera sobre os blocos para encontrar e modificar a entrada
+    
+    // --- Busca em Blocos Diretos ---
+    for (int i = 0; i < 12; ++i) {
+        status_busca = renomear_entrada_em_bloco(fd, sb, dir_ino.block[i], nome_antigo_arg, nome_novo_arg);
+        if (status_busca != 0) goto end_rename; // Se encontrou (1) ou deu erro (-1), termina.
+    }
+
+    // --- Busca em Bloco de Indireção Simples ---
+    if (dir_ino.block[12] != 0) {
+        if (ler_bloco(fd, sb, dir_ino.block[12], buffer_ponteiros) == 0) {
+            for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
+                status_busca = renomear_entrada_em_bloco(fd, sb, buffer_ponteiros[i], nome_antigo_arg, nome_novo_arg);
+                if (status_busca != 0) goto end_rename;
+            }
+        }
+    }
+    
+    // --- Busca em Bloco de Indireção Dupla ---
+    if (dir_ino.block[13] != 0) {
+        if (ler_bloco(fd, sb, dir_ino.block[13], buffer_ponteiros) == 0) { // Lê o bloco de ponteiros L1
+            for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
+                if (buffer_ponteiros[i] == 0) continue; // Pula ponteiros nulos no bloco L1
+                
+                uint32_t* bloco_L2 = malloc(tamanho_bloco);
+                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê o bloco de ponteiros L2
+                    for (uint32_t j = 0; j < ponteiros_por_bloco; ++j) {
+                        status_busca = renomear_entrada_em_bloco(fd, sb, bloco_L2[j], nome_antigo_arg, nome_novo_arg);
+                        if (status_busca != 0) { // Se encontrou ou deu erro...
+                            free(bloco_L2);     // ...libera a memória...
+                            goto end_rename;   // ...e encerra a busca.
+                        }
+                    }
+                }
+                free(bloco_L2); // Libera o buffer L2 antes de ir para o próximo ponteiro L1
+            }
+        }
+    }
+    
+    // A lógica para indireção tripla (block[14]) seguiria o mesmo padrão, com mais um nível de loop.
+
+end_rename:
+    // 4. Finaliza a operação com base no resultado da busca
+    if (status_busca == 1) { // Sucesso na renomeação
+        // Atualiza o tempo de modificação do diretório pai
+        dir_ino.mtime = time(NULL);
+        escrever_inode(fd, sb, gdt, inode_dir_atual, &dir_ino);
+        printf("Arquivo '%s' renomeado para '%s' com sucesso.\n", nome_antigo_arg, nome_novo_arg);
+    } else if (status_busca == 0) { // Não encontrado após toda a busca
+        printf("rename: não foi possível encontrar o arquivo '%s'\n", nome_antigo_arg);
+    }
+    // Se status_busca for -1, a mensagem de erro já foi impressa pelo helper.
+
+    free(buffer_ponteiros);
 }

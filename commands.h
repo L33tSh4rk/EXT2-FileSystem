@@ -40,4 +40,7 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
 // --- rmdir ---
 void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg);
 
+// --- rename ---
+void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* nome_antigo_arg, char* nome_novo_arg);
+
 #endif

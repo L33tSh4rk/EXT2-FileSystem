@@ -79,14 +79,14 @@ int validar_superbloco(const superbloco* sb) {
         return 0; // Inválido
     }
 
-    // 1. Checagem fundamental: O número mágico
+    // Checagem fundamental: O número mágico
     if (sb->magic != EXT2_SUPER_MAGIC) {
         fprintf(stderr, "Erro de validação: Assinatura mágica inválida (esperado %#x, encontrado %#x).\n",
                 EXT2_SUPER_MAGIC, sb->magic);
         return 0; // Inválido
     }
 
-    // 2. Checagem de consistência das contagens
+    // Checagem de consistência das contagens
     if (sb->free_blocks_count > sb->blocks_count) {
         fprintf(stderr, "Erro de validação: Contagem de blocos livres (%u) é maior que a contagem total de blocos (%u).\n",
                 sb->free_blocks_count, sb->blocks_count);
@@ -98,7 +98,7 @@ int validar_superbloco(const superbloco* sb) {
         return 0; // Inválido
     }
     
-    // 3. Checagem da geometria dos grupos
+    // Checagem da geometria dos grupos
     if (sb->blocks_per_group == 0 || sb->inodes_per_group == 0) {
         fprintf(stderr, "Erro de validação: blocks_per_group ou inodes_per_group é zero.\n");
         return 0; // Inválido
@@ -114,14 +114,14 @@ int validar_superbloco(const superbloco* sb) {
         return 0; // Inválido
     }
 
-    // 4. Validação do tamanho do bloco
+    // Validação do tamanho do bloco
     uint32_t block_size = 1024 << sb->log_block_size;
     if (block_size < EXT2_MIN_BLOCK_SIZE || block_size > EXT2_MAX_BLOCK_SIZE) {
         fprintf(stderr, "Erro de validação: Tamanho de bloco inválido (%u bytes).\n", block_size);
         return 0; // Inválido
     }
     
-    // 5. Validação do tamanho do inode
+    // Validação do tamanho do inode
     if (sb->rev_level >= EXT2_DYNAMIC_REV) {
         if (sb->inode_size < EXT2_GOOD_OLD_INODE_SIZE || (sb->inode_size & (sb->inode_size - 1)) != 0) {
             fprintf(stderr, "Erro de validação: Para revisão dinâmica, o tamanho do inode (%u) é inválido.\n", sb->inode_size);
@@ -403,24 +403,24 @@ int ler_inode(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inod
         return -1;
     }
 
-    // 1. Descobrir a qual grupo de blocos o inode pertence.
+    // Descobrir a qual grupo de blocos o inode pertence.
     uint32_t grupo_idx = (inode_num - 1) / sb->inodes_per_group;
 
-    // 2. Obter o descritor desse grupo.
+    // Obter o descritor desse grupo.
     const group_desc* gd = &gdt[grupo_idx];
 
-    // 3. Obter o início da tabela de inodes para aquele grupo.
+    // Obter o início da tabela de inodes para aquele grupo.
     uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
     off_t inicio_tabela_inodes = (off_t)gd->inode_table * tamanho_bloco;
 
-    // 4. Calcular o índice do inode dentro do seu grupo.
+    // Calcular o índice do inode dentro do seu grupo.
     uint32_t indice_no_grupo = (inode_num - 1) % sb->inodes_per_group;
     
-    // 5. Calcular o offset final do inode.
+    // Calcular o offset final do inode.
     uint16_t tamanho_inode = obter_tamanho_inode(sb);
     off_t offset_final_inode = inicio_tabela_inodes + (indice_no_grupo * tamanho_inode);
 
-    // 6. Posicionar o cursor e ler o inode.
+    // Posicionar o cursor e ler o inode.
     if (lseek(fd, offset_final_inode, SEEK_SET) == -1) {
         perror("Erro (ler_inode): Falha ao posicionar (lseek) para o inode");
         return -1;
@@ -1849,13 +1849,13 @@ int diretorio_esta_vazio(int fd, const superbloco* sb, const inode* dir_ino) {
 
     int status_busca = 0;
 
-    // 1. Verifica os blocos diretos
+    // Verifica os blocos diretos
     for (int i = 0; i < 12; i++) {
         status_busca = bloco_dir_contem_entradas(fd, sb, dir_ino->block[i], buffer_dados);
         if (status_busca != 0) goto cleanup; // Se encontrou (1) ou deu erro (-1), para a busca.
     }
 
-    // 2. Verifica o bloco de indireção simples
+    // Verifica o bloco de indireção simples
     if (dir_ino->block[12] != 0) {
         if (ler_bloco(fd, sb, dir_ino->block[12], buffer_ponteiros) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
@@ -1865,7 +1865,7 @@ int diretorio_esta_vazio(int fd, const superbloco* sb, const inode* dir_ino) {
         }
     }
 
-    // 3. Verifica o bloco de indireção dupla
+    // Verifica o bloco de indireção dupla
     if (dir_ino->block[13] != 0) {
         if (ler_bloco(fd, sb, dir_ino->block[13], buffer_ponteiros) == 0) { // Lê L1
             for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {

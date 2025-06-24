@@ -175,6 +175,12 @@ int main(int argc, char *argv[]) {
             comando_rmdir(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
         }
 
+        else if (strcmp(comando, "rename") == 0){
+            char* caminho_arg1 = strtok(NULL, " \t\n\r");
+            char* caminho_arg2 = strtok(NULL, " \t\n\r");
+            comando_rename(fd, &sb, gdt, diretorio_atual_inode, caminho_arg1, caminho_arg2);
+        }
+
         else if (strcmp(comando, "help") == 0) {
             imprimir_ajuda();
         } 

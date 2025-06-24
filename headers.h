@@ -95,7 +95,8 @@ typedef struct {
     uint32_t creator_os;            // Sistema operacional criador
     uint32_t rev_level;             // Nível de revisão
     
-    // --- CAMPOS FALTANTES QUE CAUSAVAM O ERRO ---
+    // --- CAMPOS FALTANTES QUE CAUSAVAM O ERRO --- Para relatório: Pode-se dizer que houve uma pequena dificuldade para resolver o superbloco
+    //                                          ---                 Resultado do formato que a leitura é extraída do arquivo de imagem
     uint16_t def_resuid;            // UID padrão para blocos reservados
     uint16_t def_resgid;            // GID padrão para blocos reservados
     // -----------------------------------------
@@ -117,8 +118,7 @@ typedef struct {
     /* Offset 0xD0 */
     uint32_t algo_bitmap;           // Algoritmos de compressão
     
-    // O resto da estrutura até 1024 bytes contém outros campos
-    // que podemos ignorar por agora, mas a parte principal está correta.
+    // Mantida apenas a parte utilizável da estrutura para o projeto, mas que resolve a imagem com os campos coerentes.
 
 } __attribute__((packed)) superbloco;
 
