@@ -7,7 +7,7 @@
  * como 'info', 'help' e 'exit'.
  *
  * Data de criação: 24 de abril de 2025
- * Data de atualização: 23 de junho de 2025
+ * Data de atualização: 24 de junho de 2025
  */
 
 #include <stdio.h>
@@ -34,14 +34,14 @@ void imprimir_ajuda(void) {
  * @brief Função principal que executa o shell Ext2.
  */
 int main(int argc, char *argv[]) {
-    // 1. VERIFICAÇÃO DOS ARGUMENTOS
+    // VERIFICAÇÃO DOS ARGUMENTOS
     if (argc < 2) {
         fprintf(stderr, "Uso: %s <caminho_para_a_imagem_ext2>\n", argv[0]);
         return 1; // Encerra com código de erro
     }
     const char* caminho_imagem = argv[1];
 
-    // 2. INICIALIZAÇÃO DO SISTEMA DE ARQUIVOS
+    // INICIALIZAÇÃO DO SISTEMA DE ARQUIVOS
     printf("Abrindo a imagem do disco: %s\n", caminho_imagem);
 
     // Abre a imagem em modo de leitura (por enquanto)
@@ -87,7 +87,7 @@ int main(int argc, char *argv[]) {
     // Define a string do caminho atual, começando na raiz.
     char diretorio_atual_str[1024] = "/";
 
-    // 3. LOOP PRINCIPAL DO SHELL
+    // LOOP PRINCIPAL DO SHELL
     char linha_comando[256];
     char prompt[1024 + 4]; // Buffer para o prompt
 
@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
         
         else if (strcmp(comando, "attr") == 0) {
             char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_attr(fd, &sb, gdt, caminho_arg);
+                comando_attr(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
         }
         
         else if (strcmp(comando, "cat") == 0) {
@@ -196,10 +196,10 @@ int main(int argc, char *argv[]) {
 
     } while (1); // Loop infinito, quebra com 'exit', 'quit' ou Ctrl+D
 
-    // 4. LIMPEZA E ENCERRAMENTO
+    // LIMPEZA E ENCERRAMENTO
     printf("Liberando recursos e fechando o disco.\n");
     liberar_descritores_grupo(gdt); // Libera a memória alocada para a GDT
-    close(fd); // Fecha o arquivo da imagem
+    close(fd);                      // Fecha o arquivo da imagem
 
-    return 0; // Sucesso
+    return 0;                       // Sucesso
 }

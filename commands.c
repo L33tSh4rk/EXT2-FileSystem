@@ -73,7 +73,7 @@ void comando_print_groups(const group_desc* gdt, uint32_t num_grupos) {
 // =====================================================================================================
 
 
-void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, char* caminho_arg) {
+void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
     if (caminho_arg == NULL) {
         printf("Uso: attr <caminho_para_arquivo_ou_diretorio>\n");
         return;
@@ -84,20 +84,22 @@ void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, char* cam
         return;
     }
 
-    uint32_t inode_num = caminho_para_inode(fd, sb, gdt, EXT2_ROOT_INO, caminho_arg);
+
+    uint32_t inode_ponto_partida = (caminho_arg[0] == '/') ? EXT2_ROOT_INO : inode_dir_atual;
+    
+    uint32_t inode_num = caminho_para_inode(fd, sb, gdt, inode_ponto_partida, caminho_arg);
     
     if (inode_num == 0) {
         printf("Erro: Arquivo ou diretório não encontrado: '%s'\n", caminho_arg);
     } else {
         inode ino;
         if (ler_inode(fd, sb, gdt, inode_num, &ino) == 0) {
-            imprimir_formato_attr(&ino);
+            imprimir_formato_attr(&ino); 
         } else {
             fprintf(stderr, "Erro crítico ao ler o inode %u.\n", inode_num);
         }
     }
 }
-
 
 
 void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, char* caminho_arg) {
@@ -170,7 +172,7 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
         return;
     }
 
-    // --- LÓGICA PARA DIRETÓRIOS ---
+    // Lógica para os diretórios
     uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
     uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
 
@@ -184,7 +186,7 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
         return;
     }
 
-    // 1. Itera sobre os 12 ponteiros de blocos diretos
+    // Itera sobre os 12 ponteiros de blocos diretos
     for (int i = 0; i < 12; ++i) {
         uint32_t num_bloco = ino.block[i];
         if (num_bloco == 0) break;
@@ -194,7 +196,7 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
         }
     }
 
-    // 2. Processa o bloco de indireção simples (block[12])
+    // Processa o bloco de indireção simples (block[12])
     if (ino.block[12] != 0) {
         if (ler_bloco(fd, sb, ino.block[12], buffer_ponteiros) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
@@ -207,7 +209,7 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
         }
     }
 
-    // 3. Processa o bloco de indireção dupla (block[13])
+    // Processa o bloco de indireção dupla (block[13])
     if (ino.block[13] != 0) {
         if (ler_bloco(fd, sb, ino.block[13], buffer_ponteiros) == 0) { // Lê o bloco de ponteiros L1
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
@@ -228,32 +230,8 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
         }
     }
 
-    // 4. Processa o bloco de indireção tripla (block[14])
-    if (ino.block[14] != 0) {
-        if (ler_bloco(fd, sb, ino.block[14], buffer_ponteiros) == 0) { // Lê L1
-            for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
-                if (buffer_ponteiros[i] == 0) break;
-                uint32_t* bloco_L2 = malloc(tamanho_bloco);
-                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê L2
-                    for (uint32_t j = 0; j < ponteiros_por_bloco; ++j) {
-                        if (bloco_L2[j] == 0) break;
-                        uint32_t* bloco_L3 = malloc(tamanho_bloco);
-                        if (bloco_L3 && ler_bloco(fd, sb, bloco_L2[j], bloco_L3) == 0) { // Lê L3
-                            for (uint32_t k = 0; k < ponteiros_por_bloco; ++k) {
-                                uint32_t num_bloco = bloco_L3[k];
-                                if (num_bloco == 0) break;
-                                if (ler_bloco(fd, sb, num_bloco, buffer_dados) == 0) {
-                                    imprimir_entradas_de_bloco_dir(buffer_dados, tamanho_bloco);
-                                }
-                            }
-                        }
-                        free(bloco_L3);
-                    }
-                }
-                free(bloco_L2);
-            }
-        }
-    }
+    // O processamento do bloco de indireção tripla (block[14]) foi omitido por questões de raridade em seu uso.
+    
 
     free(buffer_dados);
     free(buffer_ponteiros);
@@ -283,11 +261,11 @@ void comando_cd(int fd, const superbloco* sb, const group_desc* gdt,
                 uint32_t* p_inode_dir_atual, char* diretorio_atual_str,
                 char* caminho_arg) {
     if (caminho_arg == NULL) {
-        // 'cd' sem argumentos não faz nada, ou poderia ir para um diretório "home" se tivéssemos um.
+        // 'cd' sem argumentos não faz nada
         return;
     }
 
-    // 1. Encontra o inode do diretório de destino
+    // Encontra o inode do diretório de destino
     uint32_t inode_destino = caminho_para_inode(fd, sb, gdt, *p_inode_dir_atual, caminho_arg);
 
     if (inode_destino == 0) {
@@ -295,7 +273,7 @@ void comando_cd(int fd, const superbloco* sb, const group_desc* gdt,
         return;
     }
 
-    // 2. Verifica se o destino é realmente um diretório
+    // Verifica se o destino é realmente um diretório
     inode ino;
     if (ler_inode(fd, sb, gdt, inode_destino, &ino) != 0) {
         return; // Erro já foi impresso por ler_inode
@@ -305,7 +283,7 @@ void comando_cd(int fd, const superbloco* sb, const group_desc* gdt,
         return;
     }
 
-    // 3. Atualiza o estado do shell (o inode e a string do caminho)
+    // Atualiza o estado do shell (o inode e a string do caminho)
     *p_inode_dir_atual = inode_destino;
 
     // Lógica para atualizar a string do caminho
@@ -368,13 +346,10 @@ void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
         return;
     }
 
+    // Verifica se o arquivo já existe. Se sim, imprime o erro e para.
     uint32_t inode_existente_num = procurar_entrada_no_diretorio(fd, sb, gdt, inode_pai_num, nome_arquivo_novo);
     if (inode_existente_num != 0) {
-        inode inode_existente;
-        if (ler_inode(fd, sb, gdt, inode_existente_num, &inode_existente) == 0) {
-            inode_existente.atime = inode_existente.mtime = time(NULL);
-            escrever_inode(fd, sb, gdt, inode_existente_num, &inode_existente);
-        }
+        printf("touch: não foi possível criar o arquivo '%s': Arquivo já existe\n", caminho_arg);
         return;
     }
 
@@ -505,7 +480,7 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
         return;
     }
 
-    // 1. Separar caminho pai e nome do novo diretório
+    // Separar caminho pai e nome do novo diretório
     char copia_caminho1[1024], copia_caminho2[1024];
     strncpy(copia_caminho1, caminho_arg, 1024);
     strncpy(copia_caminho2, caminho_arg, 1024);
@@ -517,7 +492,7 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
         return;
     }
 
-    // 2. Encontrar e validar o diretório pai
+    // Encontrar e validar o diretório pai
     uint32_t inode_pai_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, dir_pai_str);
     if (inode_pai_num == 0) {
         printf("mkdir: diretório pai '%s' não encontrado\n", dir_pai_str);
@@ -529,13 +504,13 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
         return;
     }
 
-    // 3. Verificar se o diretório já existe
+    // Verificar se o diretório já existe
     if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_pai_num, nome_dir_novo) != 0) {
         printf("mkdir: não foi possível criar o diretório '%s': Arquivo já existe\n", caminho_arg);
         return;
     }
 
-    // 4. Alocar recursos para o novo diretório (inode E um bloco de dados)
+    // Alocar recursos para o novo diretório (inode E um bloco de dados)
     uint32_t novo_dir_inode_num = alocar_inode(fd, sb, gdt);
     if (novo_dir_inode_num == 0) {
         printf("mkdir: falha ao alocar inode para novo diretório\n");
@@ -548,7 +523,7 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
         return;
     }
 
-    // 5. Preparar o bloco de dados inicial com as entradas '.' e '..'
+    // Preparar o bloco de dados inicial com as entradas '.' e '..'
     uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
     char* buffer_novo_bloco = malloc(tamanho_bloco);
     memset(buffer_novo_bloco, 0, tamanho_bloco);
@@ -572,7 +547,7 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     escrever_bloco(fd, sb, novo_dir_bloco_num, buffer_novo_bloco);
     free(buffer_novo_bloco);
 
-    // 6. Inicializar e escrever o inode do novo diretório
+    // Inicializar e escrever o inode do novo diretório
     inode novo_dir_ino;
     memset(&novo_dir_ino, 0, sizeof(inode));
     novo_dir_ino.mode = EXT2_S_IFDIR | 0755; // Diretório, rwxr-xr-x
@@ -583,7 +558,7 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     novo_dir_ino.atime = novo_dir_ino.mtime = novo_dir_ino.ctime = time(NULL);
     escrever_inode(fd, sb, gdt, novo_dir_inode_num, &novo_dir_ino);
 
-    // 7. Adicionar a entrada para o novo diretório no diretório pai
+    // Adicionar a entrada para o novo diretório no diretório pai
     if (adicionar_entrada_diretorio(fd, sb, gdt, &inode_pai, inode_pai_num, novo_dir_inode_num, nome_dir_novo, EXT2_FT_DIR) != 0) {
         printf("mkdir: falha ao adicionar entrada no diretório pai. Desfazendo operações...\n");
         liberar_bloco(fd, sb, gdt, novo_dir_bloco_num);
@@ -591,7 +566,7 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
         return;
     }
     
-    // 8. Atualizar o inode do diretório pai
+    // Atualizar o inode do diretório pai
     inode_pai.links_count++; // A entrada '..' do novo diretório cria um novo link para o pai
     inode_pai.mtime = time(NULL);
     escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
@@ -613,7 +588,7 @@ void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
         return;
     }
 
-    // 1. Encontra o inode do alvo e do seu pai
+    // Encontra o inode do alvo e do seu pai
     uint32_t inode_alvo_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_arg);
     if (inode_alvo_num == 0) {
         printf("rmdir: não foi possível remover '%s': Diretório não encontrado\n", caminho_arg);
@@ -635,26 +610,26 @@ void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     inode inode_pai;
     if (ler_inode(fd, sb, gdt, inode_pai_num, &inode_pai) != 0) return;
 
-    // 2. Verifica se o diretório está vazio
+    // Verifica se o diretório está vazio
     if (diretorio_esta_vazio(fd, sb, &inode_alvo) != 1) {
         printf("rmdir: não foi possível remover '%s': Diretório não está vazio\n", caminho_arg);
         return;
     }
 
-    // 3. Remove a entrada do diretório pai
+    // Remove a entrada do diretório pai
     if (remover_entrada_diretorio(fd, sb, &inode_pai, nome_dir_removido) != 0) {
         printf("rmdir: erro ao remover entrada do diretório pai.\n");
         return;
     }
 
-    // 4. Libera os recursos do diretório removido
+    // Libera os recursos do diretório removido
     liberar_bloco(fd, sb, gdt, inode_alvo.block[0]); // Diretórios vazios só têm 1 bloco
     inode_alvo.dtime = time(NULL);
     inode_alvo.links_count = 0; // Diretório vazio não tem mais links
     escrever_inode(fd, sb, gdt, inode_alvo_num, &inode_alvo); // Salva o dtime e links_count
     liberar_inode(fd, sb, gdt, inode_alvo_num);
 
-    // 5. Atualiza o inode pai
+    // Atualiza o inode pai
     inode_pai.links_count--; // A entrada '..' que existia no dir removido foi-se embora
     inode_pai.mtime = time(NULL);
     escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
@@ -725,10 +700,10 @@ static int renomear_entrada_em_bloco(int fd, const superbloco* sb, uint32_t num_
 
 /**
  * @brief Executa a lógica do comando 'rename', renomeando um arquivo no diretório atual.
- * Esta versão robusta procura a entrada em blocos diretos e indiretos (simples e duplos).
+ * Esta  procura a entrada em blocos diretos e indiretos (simples e duplos).
  */
 void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* nome_antigo_arg, char* nome_novo_arg) {
-    // 1. Validação dos argumentos
+    // Validação dos argumentos
     if (nome_antigo_arg == NULL || nome_novo_arg == NULL) {
         printf("Uso: rename <nome_antigo> <nome_novo>\n");
         return;
@@ -746,7 +721,7 @@ void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_
         return;
     }
 
-    // 2. Prepara buffers e variáveis para a busca
+    // Prepara buffers e variáveis para a busca
     inode dir_ino;
     if (ler_inode(fd, sb, gdt, inode_dir_atual, &dir_ino) != 0) return;
 
@@ -761,15 +736,15 @@ void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_
     
     int status_busca = 0;
 
-    // 3. Itera sobre os blocos para encontrar e modificar a entrada
+    // Itera sobre os blocos para encontrar e modificar a entrada
     
-    // --- Busca em Blocos Diretos ---
+    // Busca em Blocos Diretos
     for (int i = 0; i < 12; ++i) {
         status_busca = renomear_entrada_em_bloco(fd, sb, dir_ino.block[i], nome_antigo_arg, nome_novo_arg);
         if (status_busca != 0) goto end_rename; // Se encontrou (1) ou deu erro (-1), termina.
     }
 
-    // --- Busca em Bloco de Indireção Simples ---
+    // Busca em Bloco de Indireção Simples
     if (dir_ino.block[12] != 0) {
         if (ler_bloco(fd, sb, dir_ino.block[12], buffer_ponteiros) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
@@ -779,7 +754,7 @@ void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_
         }
     }
     
-    // --- Busca em Bloco de Indireção Dupla ---
+    // Busca em Bloco de Indireção Dupla
     if (dir_ino.block[13] != 0) {
         if (ler_bloco(fd, sb, dir_ino.block[13], buffer_ponteiros) == 0) { // Lê o bloco de ponteiros L1
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
@@ -803,7 +778,7 @@ void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_
     // A lógica para indireção tripla (block[14]) seguiria o mesmo padrão, com mais um nível de loop.
 
 end_rename:
-    // 4. Finaliza a operação com base no resultado da busca
+    // Finaliza a operação com base no resultado da busca
     if (status_busca == 1) { // Sucesso na renomeação
         // Atualiza o tempo de modificação do diretório pai
         dir_ino.mtime = time(NULL);
