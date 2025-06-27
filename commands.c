@@ -791,3 +791,158 @@ end_rename:
 
     free(buffer_ponteiros);
 }
+
+/**
+ * @brief Executa a lógica do comando 'cp', copiando um arquivo de origem para um destino.
+ * O destino pode ser um diretório ou um novo nome de arquivo.
+ */
+void comando_cp(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_origem, char* caminho_destino) {
+    if (caminho_origem == NULL || caminho_destino == NULL) {
+        printf("Uso: cp <origem> <destino>\n");
+        return;
+    }
+
+    uint32_t inode_origem = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_origem);
+    if (inode_origem == 0) {
+        printf("cp: arquivo de origem '%s' não encontrado.\n", caminho_origem);
+        return;
+    }
+
+    inode ino_origem;
+    if (ler_inode(fd, sb, gdt, inode_origem, &ino_origem) != 0 || !EXT2_IS_REG(ino_origem.mode)) {
+        printf("cp: '%s' não é um arquivo regular.\n", caminho_origem);
+        return;
+    }
+
+    // Preparar nome e diretório de destino
+    char dest_copy1[1024], dest_copy2[1024];
+    strncpy(dest_copy1, caminho_destino, sizeof(dest_copy1));
+    strncpy(dest_copy2, caminho_destino, sizeof(dest_copy2));
+    char* nome_destino = basename(dest_copy1);
+    char* caminho_pai = dirname(dest_copy2);
+
+    if (strlen(nome_destino) > EXT2_NAME_LEN) {
+        printf("cp: nome de destino é muito longo.\n");
+        return;
+    }
+
+    uint32_t inode_pai = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_pai);
+    if (inode_pai == 0) {
+        printf("cp: diretório pai '%s' não encontrado.\n", caminho_pai);
+        return;
+    }
+
+    inode inode_pai_ino;
+    if (ler_inode(fd, sb, gdt, inode_pai, &inode_pai_ino) != 0 || !EXT2_IS_DIR(inode_pai_ino.mode)) {
+        printf("cp: '%s' não é um diretório.\n", caminho_pai);
+        return;
+    }
+
+    if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_pai, nome_destino) != 0) {
+        printf("cp: '%s' já existe.\n", caminho_destino);
+        return;
+    }
+
+    uint32_t novo_inode = alocar_inode(fd, sb, gdt);
+    if (novo_inode == 0) {
+        printf("cp: falha ao alocar inode.\n");
+        return;
+    }
+
+    inode novo_ino;
+    memset(&novo_ino, 0, sizeof(inode));
+    novo_ino.mode = ino_origem.mode;
+    novo_ino.size = ino_origem.size;
+    novo_ino.links_count = 1;
+    novo_ino.atime = novo_ino.mtime = novo_ino.ctime = time(NULL);
+    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
+
+    // Buffers auxiliares
+    char* buffer_dados = malloc(tamanho_bloco);
+    uint32_t* buffer_indireto = malloc(tamanho_bloco);
+    uint32_t* buffer_duplo = malloc(tamanho_bloco);
+
+    if (!buffer_dados || !buffer_indireto || !buffer_duplo) {
+        printf("cp: falha ao alocar buffers.\n");
+        free(buffer_dados); free(buffer_indireto); free(buffer_duplo);
+        return;
+    }
+
+    // --------------------- COPIAR BLOCOS DIRETOS ---------------------
+    for (int i = 0; i < 12 && ino_origem.block[i]; i++) {
+        if (ler_bloco(fd, sb, ino_origem.block[i], buffer_dados) != 0) continue;
+
+        uint32_t novo_bloco = alocar_bloco(fd, sb, gdt, novo_inode);
+        if (novo_bloco == 0) break;
+
+        escrever_bloco(fd, sb, novo_bloco, buffer_dados);
+        novo_ino.block[i] = novo_bloco;
+    }
+
+    // --------------------- COPIAR BLOCOS DE INDIREÇÃO SIMPLES ---------------------
+    if (ino_origem.block[12]) {
+        if (ler_bloco(fd, sb, ino_origem.block[12], buffer_indireto) == 0) {
+            uint32_t bloco_indireto_novo = alocar_bloco(fd, sb, gdt, novo_inode);
+            if (bloco_indireto_novo != 0) {
+                uint32_t* novo_bloco_ptr = calloc(ponteiros_por_bloco, sizeof(uint32_t));
+                for (uint32_t i = 0; i < ponteiros_por_bloco && buffer_indireto[i]; i++) {
+                    if (ler_bloco(fd, sb, buffer_indireto[i], buffer_dados) != 0) continue;
+                    uint32_t bloco_novo = alocar_bloco(fd, sb, gdt, novo_inode);
+                    if (bloco_novo == 0) break;
+                    escrever_bloco(fd, sb, bloco_novo, buffer_dados);
+                    novo_bloco_ptr[i] = bloco_novo;
+                }
+                escrever_bloco(fd, sb, bloco_indireto_novo, novo_bloco_ptr);
+                novo_ino.block[12] = bloco_indireto_novo;
+                free(novo_bloco_ptr);
+            }
+        }
+    }
+
+    // --------------------- COPIAR BLOCOS DE INDIREÇÃO DUPLA ---------------------
+    if (ino_origem.block[13]) {
+        if (ler_bloco(fd, sb, ino_origem.block[13], buffer_indireto) == 0) {
+            uint32_t bloco_l1_novo = alocar_bloco(fd, sb, gdt, novo_inode);
+            if (bloco_l1_novo != 0) {
+                uint32_t* ponteiros_l1_novo = calloc(ponteiros_por_bloco, sizeof(uint32_t));
+                for (uint32_t i = 0; i < ponteiros_por_bloco && buffer_indireto[i]; i++) {
+                    if (ler_bloco(fd, sb, buffer_indireto[i], buffer_duplo) != 0) continue;
+                    uint32_t bloco_l2_novo = alocar_bloco(fd, sb, gdt, novo_inode);
+                    if (bloco_l2_novo == 0) break;
+
+                    uint32_t* ponteiros_l2_novo = calloc(ponteiros_por_bloco, sizeof(uint32_t));
+                    for (uint32_t j = 0; j < ponteiros_por_bloco && buffer_duplo[j]; j++) {
+                        if (ler_bloco(fd, sb, buffer_duplo[j], buffer_dados) != 0) continue;
+                        uint32_t bloco_novo = alocar_bloco(fd, sb, gdt, novo_inode);
+                        if (bloco_novo == 0) break;
+                        escrever_bloco(fd, sb, bloco_novo, buffer_dados);
+                        ponteiros_l2_novo[j] = bloco_novo;
+                    }
+                    escrever_bloco(fd, sb, bloco_l2_novo, ponteiros_l2_novo);
+                    ponteiros_l1_novo[i] = bloco_l2_novo;
+                    free(ponteiros_l2_novo);
+                }
+                escrever_bloco(fd, sb, bloco_l1_novo, ponteiros_l1_novo);
+                novo_ino.block[13] = bloco_l1_novo;
+                free(ponteiros_l1_novo);
+            }
+        }
+    }
+
+    free(buffer_dados);
+    free(buffer_indireto);
+    free(buffer_duplo);
+
+    escrever_inode(fd, sb, gdt, novo_inode, &novo_ino);
+
+    if (adicionar_entrada_diretorio(fd, sb, gdt, &inode_pai_ino, inode_pai, novo_inode, nome_destino, EXT2_FT_REG_FILE) != 0) {
+        printf("cp: falha ao adicionar arquivo no diretório pai.\n");
+        liberar_inode(fd, sb, gdt, novo_inode);
+        return;
+    }
+
+    inode_pai_ino.mtime = time(NULL);
+    escrever_inode(fd, sb, gdt, inode_pai, &inode_pai_ino);
+    printf("Arquivo copiado com sucesso de '%s' para '%s'.\n", caminho_origem, caminho_destino);
+}

@@ -189,6 +189,12 @@ int main(int argc, char *argv[]) {
             printf("Saindo...\n");
             break;
         } 
+
+        else if (strcmp(comando, "cp") == 0) {
+            char* caminho_origem = strtok(NULL, " \t\n\r");
+            char* caminho_destino = strtok(NULL, " \t\n\r");
+            comando_cp(fd, &sb, gdt, diretorio_atual_inode, caminho_origem, caminho_destino);
+        }
         
         else {
             printf("Comando desconhecido: '%s'. Digite 'help' para ver a lista de comandos.\n", comando);
