@@ -15,7 +15,7 @@ void comando_info(const superbloco* sb, uint32_t num_grupos);
 void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg);
 
 // --- cat ---
-void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, char* caminho_arg);
+void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg);
 
 // --- ls ---
 void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg);

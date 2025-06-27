@@ -102,7 +102,7 @@ void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, uint32_t 
 }
 
 
-void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, char* caminho_arg) {
+void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
     if (caminho_arg == NULL) {
         printf("Uso: cat <caminho_para_arquivo>\n");
         return;
@@ -112,7 +112,9 @@ void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, char* cami
         return;
     }
 
-    uint32_t inode_num = caminho_para_inode(fd, sb, gdt, EXT2_ROOT_INO, caminho_arg);
+    uint32_t inode_ponto_partida = (caminho_arg[0] == '/') ? EXT2_ROOT_INO : inode_dir_atual;
+    uint32_t inode_num = caminho_para_inode(fd, sb, gdt, inode_ponto_partida, caminho_arg);
+
     if (inode_num == 0) {
         printf("cat: %s: Arquivo ou diretório não encontrado\n", caminho_arg);
         return;

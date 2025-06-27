@@ -137,7 +137,7 @@ int main(int argc, char *argv[]) {
         
         else if (strcmp(comando, "cat") == 0) {
             char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_cat(fd, &sb, gdt, caminho_arg);
+            comando_cat(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
         }
 
          else if (strcmp(comando, "ls") == 0) {
