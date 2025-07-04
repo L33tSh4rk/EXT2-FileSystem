@@ -12,8 +12,8 @@
 /**
  * @brief Executa a lógica do comando 'info', que imprime o superbloco.
  */
-void comando_info(const superbloco* sb, uint32_t num_grupos) {
-    if (strtok(NULL, " \t\n\r") != NULL) {
+void comando_info(const superbloco* sb, uint32_t num_grupos, char *argumentos) {
+    if (argumentos != NULL) {
         printf("Comando 'info' não aceita argumentos.\n");
         return;
     }
@@ -46,16 +46,13 @@ void comando_print_inode(int fd, const superbloco* sb, const group_desc* gdt, ch
         printf("Comando 'print inode' recebeu argumentos demais.\n");
         return;
     }
-
     char* endptr;
     long num_inode_long = strtol(arg_num_inode, &endptr, 10);
-    
     if (*endptr != '\0' || num_inode_long <= 0) {
         printf("Erro: O número do inode '%s' é inválido.\n", arg_num_inode);
     } else {
         uint32_t num_inode = (uint32_t)num_inode_long;
         inode ino_para_imprimir;
-
         if (ler_inode(fd, sb, gdt, num_inode, &ino_para_imprimir) == 0) {
             print_inode(&ino_para_imprimir, num_inode);
         }
@@ -73,28 +70,19 @@ void comando_print_groups(const group_desc* gdt, uint32_t num_grupos) {
 // =====================================================================================================
 
 
-void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
-    if (caminho_arg == NULL) {
-        printf("Uso: attr <caminho_para_arquivo_ou_diretorio>\n");
+void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
+    if (argumentos == NULL) {
+        printf("Uso: attr <caminho>\n");
         return;
     }
-    
-    if (strtok(NULL, " \t\n\r") != NULL) {
-        printf("Comando 'attr' recebeu argumentos demais.\n");
-        return;
-    }
-
-
-    uint32_t inode_ponto_partida = (caminho_arg[0] == '/') ? EXT2_ROOT_INO : inode_dir_atual;
-    
-    uint32_t inode_num = caminho_para_inode(fd, sb, gdt, inode_ponto_partida, caminho_arg);
-    
+    uint32_t inode_ponto_partida = (argumentos[0] == '/') ? EXT2_ROOT_INO : inode_dir_atual;
+    uint32_t inode_num = caminho_para_inode(fd, sb, gdt, inode_ponto_partida, argumentos);
     if (inode_num == 0) {
-        printf("Erro: Arquivo ou diretório não encontrado: '%s'\n", caminho_arg);
+        printf("Erro: Arquivo ou diretório não encontrado: '%s'\n", argumentos);
     } else {
         inode ino;
         if (ler_inode(fd, sb, gdt, inode_num, &ino) == 0) {
-            imprimir_formato_attr(&ino); 
+            imprimir_formato_attr(&ino);
         } else {
             fprintf(stderr, "Erro crítico ao ler o inode %u.\n", inode_num);
         }
@@ -102,61 +90,54 @@ void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, uint32_t 
 }
 
 
-void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
-    if (caminho_arg == NULL) {
+void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
+    if (argumentos == NULL) {
         printf("Uso: cat <caminho_para_arquivo>\n");
         return;
     }
-    if (strtok(NULL, " \t\n\r") != NULL) {
-        printf("Comando 'cat' recebeu argumentos demais.\n");
-        return;
-    }
-
-    uint32_t inode_ponto_partida = (caminho_arg[0] == '/') ? EXT2_ROOT_INO : inode_dir_atual;
-    uint32_t inode_num = caminho_para_inode(fd, sb, gdt, inode_ponto_partida, caminho_arg);
-
+    uint32_t inode_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, argumentos);
     if (inode_num == 0) {
-        printf("cat: %s: Arquivo ou diretório não encontrado\n", caminho_arg);
+        printf("cat: %s: Arquivo não encontrado\n", argumentos);
         return;
     }
-
     inode ino;
-    if (ler_inode(fd, sb, gdt, inode_num, &ino) != 0) {
-        fprintf(stderr, "Erro crítico ao tentar ler o inode %u.\n", inode_num);
-        return;
-    }
-
-    // Valida se é um arquivo regular
-    if (!EXT2_IS_REG(ino.mode)) {
-        printf("cat: %s: Não é um arquivo regular\n", caminho_arg);
+    if (ler_inode(fd, sb, gdt, inode_num, &ino) != 0) return;
+    if (EXT2_IS_DIR(ino.mode)) {
+        // Se for um diretório, imprime o erro específico e para.
+        printf("cat: %s: É um diretório\n", argumentos);
         return;
     }
     
-    // Lê o conteúdo do arquivo para a memória
+    if (!EXT2_IS_REG(ino.mode)) {
+        // Se não for um diretório, mas também não for um arquivo regular (ex: link simbólico, socket),
+        // imprime um erro genérico.
+        printf("cat: %s: Não é possível ler o conteúdo deste tipo de arquivo\n", argumentos);
+        return;
+    }
+    
     char* conteudo = ler_conteudo_arquivo(fd, sb, &ino);
-
     if (conteudo) {
-        // Imprime o conteúdo na tela
         printf("%s", conteudo);
-        // Libera a memória alocada pela função auxiliar
         free(conteudo);
-    } else {
-        fprintf(stderr, "Erro ao tentar ler o conteúdo do arquivo.\n");
     }
 }
 
 
 
-void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
+void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
     uint32_t inode_a_listar;
     char* nome_alvo;
 
-    if (caminho_arg == NULL) {
+    // Determina qual diretório/arquivo listar com base nos argumentos
+    if (argumentos == NULL) {
+        // Nenhum argumento: lista o diretório de trabalho atual
         inode_a_listar = inode_dir_atual;
-        nome_alvo = ".";
+        nome_alvo = "."; // Usado para mensagens de erro
     } else {
-        inode_a_listar = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_arg);
-        nome_alvo = caminho_arg;
+        // Argumento fornecido: resolve o caminho
+        uint32_t ponto_partida = (argumentos[0] == '/') ? EXT2_ROOT_INO : inode_dir_atual;
+        inode_a_listar = caminho_para_inode(fd, sb, gdt, ponto_partida, argumentos);
+        nome_alvo = argumentos;
     }
 
     if (inode_a_listar == 0) {
@@ -164,17 +145,19 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
         return;
     }
 
+    // Lê o inode do alvo
     inode ino;
     if (ler_inode(fd, sb, gdt, inode_a_listar, &ino) != 0) {
         return;
     }
 
+    // Se for um arquivo regular, apenas imprime seu nome e termina
     if (!EXT2_IS_DIR(ino.mode)) {
         printf("%s\n", nome_alvo);
         return;
     }
 
-    // Lógica para os diretórios
+    // Se for um diretório, prepara para listar seu conteúdo
     uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
     uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
 
@@ -188,41 +171,36 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
         return;
     }
 
-    // Itera sobre os 12 ponteiros de blocos diretos
+    // --- Itera sobre os 12 ponteiros de blocos diretos ---
     for (int i = 0; i < 12; ++i) {
-        uint32_t num_bloco = ino.block[i];
-        if (num_bloco == 0) break;
-
-        if (ler_bloco(fd, sb, num_bloco, buffer_dados) == 0) {
+        if (ino.block[i] == 0) break;
+        if (ler_bloco(fd, sb, ino.block[i], buffer_dados) == 0) {
             imprimir_entradas_de_bloco_dir(buffer_dados, tamanho_bloco);
         }
     }
 
-    // Processa o bloco de indireção simples (block[12])
+    // --- Processa o bloco de indireção simples (block[12]) ---
     if (ino.block[12] != 0) {
         if (ler_bloco(fd, sb, ino.block[12], buffer_ponteiros) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
-                uint32_t num_bloco = buffer_ponteiros[i];
-                if (num_bloco == 0) break;
-                if (ler_bloco(fd, sb, num_bloco, buffer_dados) == 0) {
+                if (buffer_ponteiros[i] == 0) break;
+                if (ler_bloco(fd, sb, buffer_ponteiros[i], buffer_dados) == 0) {
                     imprimir_entradas_de_bloco_dir(buffer_dados, tamanho_bloco);
                 }
             }
         }
     }
 
-    // Processa o bloco de indireção dupla (block[13])
+    // --- Processa o bloco de indireção dupla (block[13]) ---
     if (ino.block[13] != 0) {
-        if (ler_bloco(fd, sb, ino.block[13], buffer_ponteiros) == 0) { // Lê o bloco de ponteiros L1
+        if (ler_bloco(fd, sb, ino.block[13], buffer_ponteiros) == 0) { // Lê L1
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
                 if (buffer_ponteiros[i] == 0) break;
-                
                 uint32_t* bloco_L2 = malloc(tamanho_bloco);
-                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê o bloco de ponteiros L2
+                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê L2
                     for (uint32_t j = 0; j < ponteiros_por_bloco; ++j) {
-                        uint32_t num_bloco = bloco_L2[j];
-                        if (num_bloco == 0) break;
-                        if (ler_bloco(fd, sb, num_bloco, buffer_dados) == 0) {
+                        if (bloco_L2[j] == 0) break;
+                        if (ler_bloco(fd, sb, bloco_L2[j], buffer_dados) == 0) {
                             imprimir_entradas_de_bloco_dir(buffer_dados, tamanho_bloco);
                         }
                     }
@@ -231,9 +209,8 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
             }
         }
     }
-
-    // O processamento do bloco de indireção tripla (block[14]) foi omitido por questões de raridade em seu uso.
     
+    // Logica para indireção tripla omitida por questoes de simplicidade
 
     free(buffer_dados);
     free(buffer_ponteiros);
@@ -242,9 +219,9 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
 /**
  * @brief Executa a lógica do comando 'pwd', que imprime o diretório de trabalho atual.
  */
-void comando_pwd(const char* diretorio_atual_str) {
+void comando_pwd(const char* diretorio_atual_str, char* argumentos) {
     // Validação para garantir que o comando não recebeu argumentos extras
-    if (strtok(NULL, " \t\n\r") != NULL) {
+    if (argumentos != NULL) {
         printf("Comando 'pwd' não aceita argumentos.\n");
         return;
     }
@@ -261,17 +238,17 @@ void comando_pwd(const char* diretorio_atual_str) {
  */
 void comando_cd(int fd, const superbloco* sb, const group_desc* gdt,
                 uint32_t* p_inode_dir_atual, char* diretorio_atual_str,
-                char* caminho_arg) {
-    if (caminho_arg == NULL) {
+                char* argumentos) {
+    if (argumentos == NULL) {
         // 'cd' sem argumentos não faz nada
         return;
     }
 
     // Encontra o inode do diretório de destino
-    uint32_t inode_destino = caminho_para_inode(fd, sb, gdt, *p_inode_dir_atual, caminho_arg);
+    uint32_t inode_destino = caminho_para_inode(fd, sb, gdt, *p_inode_dir_atual, argumentos);
 
     if (inode_destino == 0) {
-        printf("cd: %s: Arquivo ou diretório não encontrado\n", caminho_arg);
+        printf("cd: %s: Arquivo ou diretório não encontrado\n", argumentos);
         return;
     }
 
@@ -281,7 +258,7 @@ void comando_cd(int fd, const superbloco* sb, const group_desc* gdt,
         return; // Erro já foi impresso por ler_inode
     }
     if (!EXT2_IS_DIR(ino.mode)) {
-        printf("cd: %s: Não é um diretório\n", caminho_arg);
+        printf("cd: %s: Não é um diretório\n", argumentos);
         return;
     }
 
@@ -289,24 +266,24 @@ void comando_cd(int fd, const superbloco* sb, const group_desc* gdt,
     *p_inode_dir_atual = inode_destino;
 
     // Lógica para atualizar a string do caminho
-    if (strcmp(caminho_arg, "..") == 0) {
+    if (strcmp(argumentos, "..") == 0) {
         // Sobe um nível. Usa dirname para encontrar o diretório pai da string atual.
         // Precisa de uma cópia, pois dirname pode modificar a string.
         char temp_path[1024];
         strncpy(temp_path, diretorio_atual_str, 1024);
         char* parent = dirname(temp_path);
         strcpy(diretorio_atual_str, parent);
-    } else if (strcmp(caminho_arg, ".") != 0) {
+    } else if (strcmp(argumentos, ".") != 0) {
         // Se o caminho for absoluto, apenas copie-o
-        if (caminho_arg[0] == '/') {
-            strcpy(diretorio_atual_str, caminho_arg);
+        if (argumentos[0] == '/') {
+            strcpy(diretorio_atual_str, argumentos);
         } else {
             // Se for relativo, anexe-o ao caminho atual
             // Adiciona a barra, a menos que já estejamos na raiz
             if (strcmp(diretorio_atual_str, "/") != 0) {
                 strcat(diretorio_atual_str, "/");
             }
-            strcat(diretorio_atual_str, caminho_arg);
+            strcat(diretorio_atual_str, argumentos);
         }
     }
     // Se for 'cd .', não faz nada com a string.
@@ -320,15 +297,15 @@ void comando_cd(int fd, const superbloco* sb, const group_desc* gdt,
 /**
  * @brief Executa a lógica do comando 'touch', criando um arquivo vazio ou atualizando seu timestamp.
  */
-void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
-    if (caminho_arg == NULL) {
+void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
+    if (argumentos == NULL) {
         printf("touch: faltando operando de arquivo\n");
         return;
     }
     
     char copia_caminho1[1024], copia_caminho2[1024];
-    strncpy(copia_caminho1, caminho_arg, 1024);
-    strncpy(copia_caminho2, caminho_arg, 1024);
+    strncpy(copia_caminho1, argumentos, 1024);
+    strncpy(copia_caminho2, argumentos, 1024);
     char* dir_pai_str = dirname(copia_caminho1);
     char* nome_arquivo_novo = basename(copia_caminho2);
 
@@ -351,7 +328,7 @@ void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     // Verifica se o arquivo já existe. Se sim, imprime o erro e para.
     uint32_t inode_existente_num = procurar_entrada_no_diretorio(fd, sb, gdt, inode_pai_num, nome_arquivo_novo);
     if (inode_existente_num != 0) {
-        printf("touch: não foi possível criar o arquivo '%s': Arquivo já existe\n", caminho_arg);
+        printf("touch: não foi possível criar o arquivo '%s': Arquivo já existe\n", argumentos);
         return;
     }
 
@@ -378,7 +355,7 @@ void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     inode_pai.mtime = time(NULL);
     escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
 
-    printf("Arquivo '%s' criado com sucesso.\n", caminho_arg);
+    printf("Arquivo '%s' criado com sucesso.\n", argumentos);
 }
 
 
@@ -386,29 +363,29 @@ void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
 /**
  * @brief Executa a lógica do comando 'rm', removendo um arquivo.
  */
-void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
-    if (caminho_arg == NULL) {
+void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
+    if (argumentos == NULL) {
         printf("rm: faltando operando\n");
         return;
     }
 
-    uint32_t inode_alvo_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_arg);
+    uint32_t inode_alvo_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, argumentos);
     if (inode_alvo_num == 0) {
-        printf("rm: não foi possível remover '%s': Arquivo não encontrado\n", caminho_arg);
+        printf("rm: não foi possível remover '%s': Arquivo não encontrado\n", argumentos);
         return;
     }
 
     inode inode_alvo;
     if (ler_inode(fd, sb, gdt, inode_alvo_num, &inode_alvo) != 0) return;
     if (EXT2_IS_DIR(inode_alvo.mode)) {
-        printf("rm: não foi possível remover '%s': É um diretório\n", caminho_arg);
+        printf("rm: não foi possível remover '%s': É um diretório\n", argumentos);
         return;
     }
     
     char copia_caminho[1024];
-    strncpy(copia_caminho, caminho_arg, 1024);
+    strncpy(copia_caminho, argumentos, 1024);
     char* nome_arquivo = basename(copia_caminho);
-    strncpy(copia_caminho, caminho_arg, 1024);
+    strncpy(copia_caminho, argumentos, 1024);
     char* dir_pai_str = dirname(copia_caminho);
     
     uint32_t inode_pai_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, dir_pai_str);
@@ -468,7 +445,7 @@ void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atua
     inode_pai.mtime = inode_pai.atime = time(NULL);
     escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
 
-    printf("Arquivo '%s' removido com sucesso.\n", caminho_arg);
+    printf("Arquivo '%s' removido com sucesso.\n", argumentos);
 }
 
 
@@ -476,16 +453,16 @@ void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atua
 /**
  * @brief Executa a lógica do comando 'mkdir', criando um novo diretório.
  */
-void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
-    if (caminho_arg == NULL) {
+void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
+    if (argumentos == NULL) {
         printf("mkdir: faltando operando\n");
         return;
     }
 
     // Separar caminho pai e nome do novo diretório
     char copia_caminho1[1024], copia_caminho2[1024];
-    strncpy(copia_caminho1, caminho_arg, 1024);
-    strncpy(copia_caminho2, caminho_arg, 1024);
+    strncpy(copia_caminho1, argumentos, 1024);
+    strncpy(copia_caminho2, argumentos, 1024);
     char* dir_pai_str = dirname(copia_caminho1);
     char* nome_dir_novo = basename(copia_caminho2);
 
@@ -508,7 +485,7 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
 
     // Verificar se o diretório já existe
     if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_pai_num, nome_dir_novo) != 0) {
-        printf("mkdir: não foi possível criar o diretório '%s': Arquivo já existe\n", caminho_arg);
+        printf("mkdir: não foi possível criar o diretório '%s': Arquivo já existe\n", argumentos);
         return;
     }
 
@@ -573,40 +550,40 @@ void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     inode_pai.mtime = time(NULL);
     escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
 
-    printf("Diretório '%s' criado com sucesso.\n", caminho_arg);
+    printf("Diretório '%s' criado com sucesso.\n", argumentos);
 }
 
 
 /**
  * @brief Executa a lógica do comando 'rmdir', removendo um diretório existente.
  */
-void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_arg) {
-    if (caminho_arg == NULL) {
+void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
+    if (argumentos == NULL) {
         printf("rmdir: faltando operando\n");
         return;
     }
-    if (strcmp(caminho_arg, ".") == 0 || strcmp(caminho_arg, "..") == 0 || strcmp(caminho_arg, "/") == 0) {
-        printf("rmdir: não é possível remover '%s': Diretório inválido ou protegido\n", caminho_arg);
+    if (strcmp(argumentos, ".") == 0 || strcmp(argumentos, "..") == 0 || strcmp(argumentos, "/") == 0) {
+        printf("rmdir: não é possível remover '%s': Diretório inválido ou protegido\n", argumentos);
         return;
     }
 
     // Encontra o inode do alvo e do seu pai
-    uint32_t inode_alvo_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_arg);
+    uint32_t inode_alvo_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, argumentos);
     if (inode_alvo_num == 0) {
-        printf("rmdir: não foi possível remover '%s': Diretório não encontrado\n", caminho_arg);
+        printf("rmdir: não foi possível remover '%s': Diretório não encontrado\n", argumentos);
         return;
     }
     inode inode_alvo;
     if (ler_inode(fd, sb, gdt, inode_alvo_num, &inode_alvo) != 0) return;
     if (!EXT2_IS_DIR(inode_alvo.mode)) {
-        printf("rmdir: não foi possível remover '%s': Não é um diretório\n", caminho_arg);
+        printf("rmdir: não foi possível remover '%s': Não é um diretório\n", argumentos);
         return;
     }
     
     char copia_caminho[1024];
-    strncpy(copia_caminho, caminho_arg, 1024);
+    strncpy(copia_caminho, argumentos, 1024);
     char* nome_dir_removido = basename(copia_caminho);
-    strncpy(copia_caminho, caminho_arg, 1024);
+    strncpy(copia_caminho, argumentos, 1024);
     char* dir_pai_str = dirname(copia_caminho);
     uint32_t inode_pai_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, dir_pai_str);
     inode inode_pai;
@@ -614,7 +591,7 @@ void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
 
     // Verifica se o diretório está vazio
     if (diretorio_esta_vazio(fd, sb, &inode_alvo) != 1) {
-        printf("rmdir: não foi possível remover '%s': Diretório não está vazio\n", caminho_arg);
+        printf("rmdir: não foi possível remover '%s': Diretório não está vazio\n", argumentos);
         return;
     }
 
@@ -636,7 +613,7 @@ void comando_rmdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
     inode_pai.mtime = time(NULL);
     escrever_inode(fd, sb, gdt, inode_pai_num, &inode_pai);
 
-    printf("Diretório '%s' removido com sucesso.\n", caminho_arg);
+    printf("Diretório '%s' removido com sucesso.\n", argumentos);
 }
 
 
@@ -701,250 +678,194 @@ static int renomear_entrada_em_bloco(int fd, const superbloco* sb, uint32_t num_
 
 
 /**
- * @brief Executa a lógica do comando 'rename', renomeando um arquivo no diretório atual.
- * Esta  procura a entrada em blocos diretos e indiretos (simples e duplos).
+ * @brief Executa a lógica do comando 'rename', renomeando um arquivo ou diretório.
+ * Esta versão final possui um parser que lida com espaços e busca em blocos
+ * diretos e indiretos (simples e duplos).
  */
-void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* nome_antigo_arg, char* nome_novo_arg) {
-    // Validação dos argumentos
-    if (nome_antigo_arg == NULL || nome_novo_arg == NULL) {
+void comando_rename(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
+    if (argumentos == NULL) {
         printf("Uso: rename <nome_antigo> <nome_novo>\n");
         return;
     }
-    if (strlen(nome_novo_arg) > EXT2_NAME_LEN) {
+
+    // parser que lida com espaços, mais complexo que o atual na função main para tratar de arquivos com nomes espaçados
+    // tenta encontrar o primeiro nome de diretório, se encontrar, o nome a frente será a renomeação, caso contrário concatena o próx. 
+    // nome e procura pelo nome do arquivo --> se passar por todas as palavras e não achar o nome do diretorio, retorna erro
+    char nome_antigo_candidato[EXT2_NAME_LEN + 1] = {0};
+    char nome_antigo_final[EXT2_NAME_LEN + 1] = {0};
+    char* nome_novo_final = NULL;
+    
+    char copia_argumentos[1024];
+    strncpy(copia_argumentos, argumentos, sizeof(copia_argumentos) - 1);
+    copia_argumentos[sizeof(copia_argumentos) - 1] = '\0';
+
+    char* token_atual = strtok(copia_argumentos, " \t");
+    
+    while (token_atual != NULL) {
+        if (strlen(nome_antigo_candidato) > 0) {
+            strcat(nome_antigo_candidato, " ");
+        }
+        strcat(nome_antigo_candidato, token_atual);
+        
+        if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_dir_atual, nome_antigo_candidato) != 0) {
+            strcpy(nome_antigo_final, nome_antigo_candidato);
+            size_t len_encontrado = strlen(nome_antigo_final);
+            nome_novo_final = argumentos + len_encontrado;
+        }
+        token_atual = strtok(NULL, " \t");
+    }
+
+    if (nome_novo_final) while(*nome_novo_final == ' ' || *nome_novo_final == '\t') nome_novo_final++;
+
+    // fim do parser
+
+    // validação dos argumentos que o parser encontrou
+    if (strlen(nome_antigo_final) == 0 || nome_novo_final == NULL || strlen(nome_novo_final) == 0) {
+        printf("rename: não foi possível encontrar o arquivo de origem ou o novo nome não foi fornecido.\n");
+        return;
+    }
+    if (strlen(nome_novo_final) > EXT2_NAME_LEN) {
         printf("rename: novo nome do arquivo é muito longo\n");
         return;
     }
-    if (strchr(nome_novo_arg, '/') != NULL) {
-        printf("rename: novo nome não pode conter '/'. A renomeação é apenas no diretório atual.\n");
+    if (strchr(nome_novo_final, '/') != NULL) {
+        printf("rename: novo nome não pode conter '/'.\n");
         return;
     }
-    if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_dir_atual, nome_novo_arg) != 0) {
-        printf("rename: não foi possível renomear para '%s': Arquivo já existe\n", nome_novo_arg);
+    if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_dir_atual, nome_novo_final) != 0) {
+        printf("rename: não foi possível renomear para '%s': Arquivo já existe\n", nome_novo_final);
         return;
     }
 
-    // Prepara buffers e variáveis para a busca
+    
+    // prepara para a busca no disco
     inode dir_ino;
     if (ler_inode(fd, sb, gdt, inode_dir_atual, &dir_ino) != 0) return;
 
     uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
     uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
     uint32_t* buffer_ponteiros = malloc(tamanho_bloco);
-
-    if (!buffer_ponteiros) {
-        perror("rename: falha ao alocar buffer de ponteiros");
-        return;
-    }
+    if (!buffer_ponteiros) { perror("rename: falha ao alocar buffer"); return; }
     
     int status_busca = 0;
 
-    // Itera sobre os blocos para encontrar e modificar a entrada
-    
-    // Busca em Blocos Diretos
+    // busca em Blocos Diretos
     for (int i = 0; i < 12; ++i) {
-        status_busca = renomear_entrada_em_bloco(fd, sb, dir_ino.block[i], nome_antigo_arg, nome_novo_arg);
-        if (status_busca != 0) goto end_rename; // Se encontrou (1) ou deu erro (-1), termina.
+        status_busca = renomear_entrada_em_bloco(fd, sb, dir_ino.block[i], nome_antigo_final, nome_novo_final);
+        if (status_busca != 0) goto end_rename;
     }
 
-    // Busca em Bloco de Indireção Simples
+    // busca em Bloco de Indireção Simples
     if (dir_ino.block[12] != 0) {
         if (ler_bloco(fd, sb, dir_ino.block[12], buffer_ponteiros) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
-                status_busca = renomear_entrada_em_bloco(fd, sb, buffer_ponteiros[i], nome_antigo_arg, nome_novo_arg);
+                status_busca = renomear_entrada_em_bloco(fd, sb, buffer_ponteiros[i], nome_antigo_final, nome_novo_final);
                 if (status_busca != 0) goto end_rename;
             }
         }
     }
     
-    // Busca em Bloco de Indireção Dupla
+    // busca em Bloco de Indireção Dupla
     if (dir_ino.block[13] != 0) {
-        if (ler_bloco(fd, sb, dir_ino.block[13], buffer_ponteiros) == 0) { // Lê o bloco de ponteiros L1
+        if (ler_bloco(fd, sb, dir_ino.block[13], buffer_ponteiros) == 0) { // Lê L1
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
-                if (buffer_ponteiros[i] == 0) continue; // Pula ponteiros nulos no bloco L1
-                
+                if (buffer_ponteiros[i] == 0) continue;
                 uint32_t* bloco_L2 = malloc(tamanho_bloco);
-                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê o bloco de ponteiros L2
+                if (bloco_L2 && ler_bloco(fd, sb, buffer_ponteiros[i], bloco_L2) == 0) { // Lê L2
                     for (uint32_t j = 0; j < ponteiros_por_bloco; ++j) {
-                        status_busca = renomear_entrada_em_bloco(fd, sb, bloco_L2[j], nome_antigo_arg, nome_novo_arg);
-                        if (status_busca != 0) { // Se encontrou ou deu erro...
-                            free(bloco_L2);     // ...libera a memória...
-                            goto end_rename;   // ...e encerra a busca.
-                        }
+                        status_busca = renomear_entrada_em_bloco(fd, sb, bloco_L2[j], nome_antigo_final, nome_novo_final);
+                        if (status_busca != 0) { free(bloco_L2); goto end_rename; }
                     }
                 }
-                free(bloco_L2); // Libera o buffer L2 antes de ir para o próximo ponteiro L1
+                free(bloco_L2);
             }
         }
     }
     
-    // A lógica para indireção tripla (block[14]) seguiria o mesmo padrão, com mais um nível de loop.
-
 end_rename:
-    // Finaliza a operação com base no resultado da busca
-    if (status_busca == 1) { // Sucesso na renomeação
-        // Atualiza o tempo de modificação do diretório pai
+    // finaliza a operação com base no resultado da busca
+    if (status_busca == 1) {
         dir_ino.mtime = time(NULL);
         escrever_inode(fd, sb, gdt, inode_dir_atual, &dir_ino);
-        printf("Arquivo '%s' renomeado para '%s' com sucesso.\n", nome_antigo_arg, nome_novo_arg);
-    } else if (status_busca == 0) { // Não encontrado após toda a busca
-        printf("rename: não foi possível encontrar o arquivo '%s'\n", nome_antigo_arg);
+        uint32_t inode_renomeado_num = procurar_entrada_no_diretorio(fd, sb, gdt, inode_dir_atual, nome_novo_final);
+        if (inode_renomeado_num != 0) {
+            inode inode_renomeado;
+            if (ler_inode(fd, sb, gdt, inode_renomeado_num, &inode_renomeado) == 0) {
+                inode_renomeado.ctime = time(NULL);
+                escrever_inode(fd, sb, gdt, inode_renomeado_num, &inode_renomeado);
+            }
+        }
+        printf("'%s' renomeado para '%s' com sucesso.\n", nome_antigo_final, nome_novo_final);
+    } else if (status_busca == 0) {
+        printf("rename: não foi possível encontrar o arquivo '%s'\n", nome_antigo_final);
     }
-    // Se status_busca for -1, a mensagem de erro já foi impressa pelo helper.
-
+    
     free(buffer_ponteiros);
 }
 
+
+
 /**
- * @brief Executa a lógica do comando 'cp', copiando um arquivo de origem para um destino.
- * O destino pode ser um diretório ou um novo nome de arquivo.
+ * @brief Executa a lógica do comando 'cp', que copia um arquivo de DENTRO da imagem Ext2
+ * para o sistema de arquivos local (host).
  */
-void comando_cp(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* caminho_origem, char* caminho_destino) {
-    if (caminho_origem == NULL || caminho_destino == NULL) {
-        printf("Uso: cp <origem> <destino>\n");
+void comando_cp(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
+   
+    // analisa argumentos para obter origem (na imagem) e destino (no host)
+    char* caminho_origem_ext2 = strtok(argumentos, " \t");
+    char* caminho_destino_host = strtok(NULL, " \t\n\r");
+
+    if (caminho_origem_ext2 == NULL || caminho_destino_host == NULL) {
+        printf("Uso: cp <arquivo_na_imagem> <caminho_local_de_destino>\n");
         return;
     }
 
-    uint32_t inode_origem = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_origem);
-    if (inode_origem == 0) {
-        printf("cp: arquivo de origem '%s' não encontrado.\n", caminho_origem);
+    // primeira fase - lê arquivo de dentro da imagem para a memória
+
+    // encontra e valida o arquivo de origem na imagem
+    uint32_t inode_origem_num = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_origem_ext2);
+    if (inode_origem_num == 0) {
+        printf("cp: arquivo de origem '%s' não encontrado na imagem.\n", caminho_origem_ext2);
         return;
     }
 
     inode ino_origem;
-    if (ler_inode(fd, sb, gdt, inode_origem, &ino_origem) != 0 || !EXT2_IS_REG(ino_origem.mode)) {
-        printf("cp: '%s' não é um arquivo regular.\n", caminho_origem);
+    if (ler_inode(fd, sb, gdt, inode_origem_num, &ino_origem) != 0 || !EXT2_IS_REG(ino_origem.mode)) {
+        printf("cp: '%s' não é um arquivo regular.\n", caminho_origem_ext2);
+        return;
+    }
+    
+    if (ino_origem.size == 0) {
+        printf("Aviso: arquivo de origem '%s' está vazio.\n", caminho_origem_ext2);
+    }
+
+    // lê o conteúdo completo do arquivo para a memória RAM
+    char* buffer_conteudo = ler_conteudo_arquivo(fd, sb, &ino_origem);
+    if (buffer_conteudo == NULL) {
+        fprintf(stderr, "cp: falha ao ler o conteúdo do arquivo de origem.\n");
         return;
     }
 
-    // Preparar nome e diretório de destino
-    char dest_copy1[1024], dest_copy2[1024];
-    strncpy(dest_copy1, caminho_destino, sizeof(dest_copy1));
-    strncpy(dest_copy2, caminho_destino, sizeof(dest_copy2));
-    char* nome_destino = basename(dest_copy1);
-    char* caminho_pai = dirname(dest_copy2);
+    // segunda fase - escreve conteudo da memoria para o disco local
 
-    if (strlen(nome_destino) > EXT2_NAME_LEN) {
-        printf("cp: nome de destino é muito longo.\n");
+    // abre o arquivo de destino no seu computador para escrita binária ("wb")
+    FILE* arquivo_destino = fopen(caminho_destino_host, "wb");
+    if (arquivo_destino == NULL) {
+        perror("cp: falha ao criar o arquivo de destino no seu computador");
+        free(buffer_conteudo); // libera a memoria
         return;
     }
 
-    uint32_t inode_pai = caminho_para_inode(fd, sb, gdt, inode_dir_atual, caminho_pai);
-    if (inode_pai == 0) {
-        printf("cp: diretório pai '%s' não encontrado.\n", caminho_pai);
-        return;
+    // escreve o conteúdo do buffer no novo arquivo
+    size_t bytes_escritos = fwrite(buffer_conteudo, 1, ino_origem.size, arquivo_destino);
+
+    // fecha o arquivo de destino e libera a memória
+    fclose(arquivo_destino);
+    free(buffer_conteudo);
+
+    if (bytes_escritos != ino_origem.size) {
+        fprintf(stderr, "cp: erro de escrita. O arquivo de destino pode estar incompleto.\n");
+    } else {
+        printf("Arquivo '%s' copiado para '%s' com sucesso (%u bytes).\n", caminho_origem_ext2, caminho_destino_host, ino_origem.size);
     }
-
-    inode inode_pai_ino;
-    if (ler_inode(fd, sb, gdt, inode_pai, &inode_pai_ino) != 0 || !EXT2_IS_DIR(inode_pai_ino.mode)) {
-        printf("cp: '%s' não é um diretório.\n", caminho_pai);
-        return;
-    }
-
-    if (procurar_entrada_no_diretorio(fd, sb, gdt, inode_pai, nome_destino) != 0) {
-        printf("cp: '%s' já existe.\n", caminho_destino);
-        return;
-    }
-
-    uint32_t novo_inode = alocar_inode(fd, sb, gdt);
-    if (novo_inode == 0) {
-        printf("cp: falha ao alocar inode.\n");
-        return;
-    }
-
-    inode novo_ino;
-    memset(&novo_ino, 0, sizeof(inode));
-    novo_ino.mode = ino_origem.mode;
-    novo_ino.size = ino_origem.size;
-    novo_ino.links_count = 1;
-    novo_ino.atime = novo_ino.mtime = novo_ino.ctime = time(NULL);
-    uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
-    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
-
-    // Buffers auxiliares
-    char* buffer_dados = malloc(tamanho_bloco);
-    uint32_t* buffer_indireto = malloc(tamanho_bloco);
-    uint32_t* buffer_duplo = malloc(tamanho_bloco);
-
-    if (!buffer_dados || !buffer_indireto || !buffer_duplo) {
-        printf("cp: falha ao alocar buffers.\n");
-        free(buffer_dados); free(buffer_indireto); free(buffer_duplo);
-        return;
-    }
-
-    // --------------------- COPIAR BLOCOS DIRETOS ---------------------
-    for (int i = 0; i < 12 && ino_origem.block[i]; i++) {
-        if (ler_bloco(fd, sb, ino_origem.block[i], buffer_dados) != 0) continue;
-
-        uint32_t novo_bloco = alocar_bloco(fd, sb, gdt, novo_inode);
-        if (novo_bloco == 0) break;
-
-        escrever_bloco(fd, sb, novo_bloco, buffer_dados);
-        novo_ino.block[i] = novo_bloco;
-    }
-
-    // --------------------- COPIAR BLOCOS DE INDIREÇÃO SIMPLES ---------------------
-    if (ino_origem.block[12]) {
-        if (ler_bloco(fd, sb, ino_origem.block[12], buffer_indireto) == 0) {
-            uint32_t bloco_indireto_novo = alocar_bloco(fd, sb, gdt, novo_inode);
-            if (bloco_indireto_novo != 0) {
-                uint32_t* novo_bloco_ptr = calloc(ponteiros_por_bloco, sizeof(uint32_t));
-                for (uint32_t i = 0; i < ponteiros_por_bloco && buffer_indireto[i]; i++) {
-                    if (ler_bloco(fd, sb, buffer_indireto[i], buffer_dados) != 0) continue;
-                    uint32_t bloco_novo = alocar_bloco(fd, sb, gdt, novo_inode);
-                    if (bloco_novo == 0) break;
-                    escrever_bloco(fd, sb, bloco_novo, buffer_dados);
-                    novo_bloco_ptr[i] = bloco_novo;
-                }
-                escrever_bloco(fd, sb, bloco_indireto_novo, novo_bloco_ptr);
-                novo_ino.block[12] = bloco_indireto_novo;
-                free(novo_bloco_ptr);
-            }
-        }
-    }
-
-    // --------------------- COPIAR BLOCOS DE INDIREÇÃO DUPLA ---------------------
-    if (ino_origem.block[13]) {
-        if (ler_bloco(fd, sb, ino_origem.block[13], buffer_indireto) == 0) {
-            uint32_t bloco_l1_novo = alocar_bloco(fd, sb, gdt, novo_inode);
-            if (bloco_l1_novo != 0) {
-                uint32_t* ponteiros_l1_novo = calloc(ponteiros_por_bloco, sizeof(uint32_t));
-                for (uint32_t i = 0; i < ponteiros_por_bloco && buffer_indireto[i]; i++) {
-                    if (ler_bloco(fd, sb, buffer_indireto[i], buffer_duplo) != 0) continue;
-                    uint32_t bloco_l2_novo = alocar_bloco(fd, sb, gdt, novo_inode);
-                    if (bloco_l2_novo == 0) break;
-
-                    uint32_t* ponteiros_l2_novo = calloc(ponteiros_por_bloco, sizeof(uint32_t));
-                    for (uint32_t j = 0; j < ponteiros_por_bloco && buffer_duplo[j]; j++) {
-                        if (ler_bloco(fd, sb, buffer_duplo[j], buffer_dados) != 0) continue;
-                        uint32_t bloco_novo = alocar_bloco(fd, sb, gdt, novo_inode);
-                        if (bloco_novo == 0) break;
-                        escrever_bloco(fd, sb, bloco_novo, buffer_dados);
-                        ponteiros_l2_novo[j] = bloco_novo;
-                    }
-                    escrever_bloco(fd, sb, bloco_l2_novo, ponteiros_l2_novo);
-                    ponteiros_l1_novo[i] = bloco_l2_novo;
-                    free(ponteiros_l2_novo);
-                }
-                escrever_bloco(fd, sb, bloco_l1_novo, ponteiros_l1_novo);
-                novo_ino.block[13] = bloco_l1_novo;
-                free(ponteiros_l1_novo);
-            }
-        }
-    }
-
-    free(buffer_dados);
-    free(buffer_indireto);
-    free(buffer_duplo);
-
-    escrever_inode(fd, sb, gdt, novo_inode, &novo_ino);
-
-    if (adicionar_entrada_diretorio(fd, sb, gdt, &inode_pai_ino, inode_pai, novo_inode, nome_destino, EXT2_FT_REG_FILE) != 0) {
-        printf("cp: falha ao adicionar arquivo no diretório pai.\n");
-        liberar_inode(fd, sb, gdt, novo_inode);
-        return;
-    }
-
-    inode_pai_ino.mtime = time(NULL);
-    escrever_inode(fd, sb, gdt, inode_pai, &inode_pai_ino);
-    printf("Arquivo copiado com sucesso de '%s' para '%s'.\n", caminho_origem, caminho_destino);
 }

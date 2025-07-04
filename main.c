@@ -102,17 +102,33 @@ int main(int argc, char *argv[]) {
             break; 
         }
 
-        char* comando = strtok(linha_comando, " \t\n\r");
+        // remove quebra de linha do final do fgets
+        linha_comando[strcspn(linha_comando, "\n\r")] = 0;
+
+        // agora pega apensa o primeiro token como comando
+        char* comando = strtok(linha_comando, " \t");
+
         if (comando == NULL) {
             continue;
         }
 
+        // pega todo o resto da linha como string de argumentos
+        char *argumentos = strtok(NULL, "");
+        // remove espaços em branco do inicio dos argumentos, se houver
+        if (argumentos) while (*argumentos == ' ' || *argumentos == '\t') argumentos++;
+        // Se após remover os espaços a string ficar vazia, trata como nula
+        if (argumentos && *argumentos == '\0') argumentos = NULL;
+
+
+
         if (strcmp(comando, "print") == 0) {
-            char* subcomando = strtok(NULL, " \t\n\r");
+            // A lógica de 'print' é especial e continua analisando os 'argumentos'
+            char* subcomando = strtok(argumentos, " \t\n\r");
             if (subcomando == NULL) {
                 printf("Comando 'print' incompleto. Uso: 'print superblock', 'print inode <n>', 'print groups'.\n");
             
             } else if (strcmp(subcomando, "superblock") == 0) {
+                // Passa o resto dos argumentos para a função validar
                 comando_print_superblock(&sb);
             
             } else if (strcmp(subcomando, "inode") == 0) {
@@ -127,58 +143,58 @@ int main(int argc, char *argv[]) {
             }
         }
         else if (strcmp(comando, "info") == 0) {
-            comando_info(&sb, num_grupos);
+            // Passa a string 'argumentos' para a função validar
+            comando_info(&sb, num_grupos, argumentos);
         }
         
         else if (strcmp(comando, "attr") == 0) {
-            char* caminho_arg = strtok(NULL, " \t\n\r");
-                comando_attr(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+            // A chamada usa 'argumentos' diretamente. A linha 'char* caminho_arg = ...' foi removida.
+            comando_attr(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
         
         else if (strcmp(comando, "cat") == 0) {
-            char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_cat(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+            // A chamada usa 'argumentos' diretamente.
+            comando_cat(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
          else if (strcmp(comando, "ls") == 0) {
-            char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_ls(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+            // A chamada usa 'argumentos' diretamente.
+            comando_ls(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "cd") == 0) {
-            char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_cd(fd, &sb, gdt, &diretorio_atual_inode, diretorio_atual_str, caminho_arg);
+            // A chamada usa 'argumentos' diretamente.
+            comando_cd(fd, &sb, gdt, &diretorio_atual_inode, diretorio_atual_str, argumentos);
         }
 
         else if (strcmp(comando, "pwd") == 0){
-            comando_pwd(diretorio_atual_str);
+            // Passa a string 'argumentos' para a função validar
+            comando_pwd(diretorio_atual_str, argumentos);
         }
 
         else if (strcmp(comando, "touch") == 0) {
-            char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_touch(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
-
+            // A chamada usa 'argumentos' diretamente.
+            comando_touch(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "rm") == 0) {
-            char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_rm(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+            // A chamada usa 'argumentos' diretamente.
+            comando_rm(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "mkdir") == 0) {
-            char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_mkdir(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+            // A chamada usa 'argumentos' diretamente.
+            comando_mkdir(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "rmdir") == 0){
-            char* caminho_arg = strtok(NULL, " \t\n\r");
-            comando_rmdir(fd, &sb, gdt, diretorio_atual_inode, caminho_arg);
+            // A chamada usa 'argumentos' diretamente.
+            comando_rmdir(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "rename") == 0){
-            char* caminho_arg1 = strtok(NULL, " \t\n\r");
-            char* caminho_arg2 = strtok(NULL, " \t\n\r");
-            comando_rename(fd, &sb, gdt, diretorio_atual_inode, caminho_arg1, caminho_arg2);
+            // A chamada usa 'argumentos' diretamente. A função interna fará o strtok.
+            comando_rename(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "help") == 0) {
@@ -191,16 +207,15 @@ int main(int argc, char *argv[]) {
         } 
 
         else if (strcmp(comando, "cp") == 0) {
-            char* caminho_origem = strtok(NULL, " \t\n\r");
-            char* caminho_destino = strtok(NULL, " \t\n\r");
-            comando_cp(fd, &sb, gdt, diretorio_atual_inode, caminho_origem, caminho_destino);
+            // A chamada usa 'argumentos' diretamente.
+            comando_cp(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
         
         else {
             printf("Comando desconhecido: '%s'. Digite 'help' para ver a lista de comandos.\n", comando);
         }
 
-    } while (1); // Loop infinito, quebra com 'exit', 'quit' ou Ctrl+D
+    } while (1);
 
     // LIMPEZA E ENCERRAMENTO
     printf("Liberando recursos e fechando o disco.\n");
