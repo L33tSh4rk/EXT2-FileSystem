@@ -21,6 +21,8 @@
 // A localização padrão (offset) do superbloco na imagem do disco.
 #define SUPERBLOCO_OFFSET 1024
 
+#define TAMANHO_CABECALHO_ENTRADA_DIR 8
+
 // Variável global estática para armazenar o tamanho do inode do sistema de arquivos atual.
 // É definida uma vez na leitura do superbloco para ser usada consistentemente.
 static uint16_t tamanho_inode_fs = EXT2_GOOD_OLD_INODE_SIZE;
@@ -988,7 +990,7 @@ static int buscar_nome_em_bloco(int fd, const superbloco* sb, uint32_t num_bloco
 
 /**
  * @brief Procura por uma entrada de nome específico dentro de um diretório, varrendo
- * todos os seus blocos (diretos e indiretos), e retorna seu número de inode. (VERSÃO FINAL)
+ * todos os seus blocos (diretos e indiretos), e retorna seu número de inode.
  *
  * @return O número do inode da entrada encontrada, ou 0 se não for encontrada ou em caso de erro.
  */
@@ -1121,7 +1123,7 @@ void formatar_permissoes(uint16_t mode, char* buffer) {
     // Primeiro caractere: tipo do arquivo
     if (EXT2_IS_DIR(mode))  buffer[0] = 'd';
     else if (EXT2_IS_LNK(mode)) buffer[0] = 'l';
-    else if (EXT2_IS_REG(mode)) buffer[0] = '-'; // O padrão Unix é '-'. O 'f' do seu professor é uma variação.
+    else if (EXT2_IS_REG(mode)) buffer[0] = 'f';
     else buffer[0] = '?';
 
     // Permissões do Dono (user)
@@ -1394,7 +1396,7 @@ void imprimir_formato_info(const superbloco* sb, uint32_t num_grupos) {
 
 
 /**
- * @brief Adiciona uma nova entrada de diretório a um diretório pai. (VERSÃO COMPLETA)
+ * @brief Adiciona uma nova entrada de diretório a um diretório pai.
  *
  * Procura espaço nos blocos existentes (diretos). Se não encontrar, tenta alocar um novo
  * bloco de dados, primeiro nos ponteiros diretos e depois no bloco de indireção simples.
@@ -1404,155 +1406,277 @@ void imprimir_formato_info(const superbloco* sb, uint32_t num_grupos) {
  */
 int adicionar_entrada_diretorio(int fd, superbloco* sb, group_desc* gdt, inode* inode_pai, uint32_t inode_pai_num, uint32_t inode_filho, const char* nome_filho, uint8_t tipo_arquivo) {
     uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
+    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
     char* buffer_dados = malloc(tamanho_bloco);
-    if (!buffer_dados) {
-        perror("adicionar_entrada: falha ao alocar buffer de dados");
-        return -1;
+    uint32_t* buffer_ponteiros_l1 = malloc(tamanho_bloco);
+    uint32_t* buffer_ponteiros_l2 = malloc(tamanho_bloco);
+
+    if (!buffer_dados || !buffer_ponteiros_l1 || !buffer_ponteiros_l2) {
+        perror("adicionar_entrada: falha ao alocar buffers");
+        goto falha;
     }
 
-    uint16_t rec_len_necessario = (sizeof(ext2_dir_entry) - EXT2_NAME_LEN + strlen(nome_filho) + 3) & ~3;
+    uint16_t tam_nome_novo = strlen(nome_filho);
+    uint16_t rec_len_necessario = (TAMANHO_CABECALHO_ENTRADA_DIR + tam_nome_novo + 3) & ~3;
 
-    // --- FASE 1: Procurar espaço nos blocos diretos existentes ---
+    // fase 1
+    // tenta encontrar espaço em blocos existentes
+
+    // busca nos 12 blocos diretos
     for (int i = 0; i < 12; ++i) {
-        if (inode_pai->block[i] == 0) continue;
-        if (ler_bloco(fd, sb, inode_pai->block[i], buffer_dados) != 0) continue;
+        uint32_t num_bloco = inode_pai->block[i];
+        if (num_bloco == 0) continue; // pula blocos não alocados
 
-        uint32_t offset = 0;
-        ext2_dir_entry* entry;
-        while (offset < tamanho_bloco) {
-            entry = (ext2_dir_entry*)(buffer_dados + offset);
-            if (entry->rec_len == 0 || (offset + entry->rec_len > tamanho_bloco) ) break;
+        if (ler_bloco(fd, sb, num_bloco, buffer_dados) == 0) {
+            uint32_t offset = 0;
+            ext2_dir_entry* entry;
+            while (offset < tamanho_bloco) {
+                entry = (ext2_dir_entry*)(buffer_dados + offset);
+                if (entry->rec_len == 0) break;
 
-            uint16_t rec_len_real_atual = (sizeof(ext2_dir_entry) - EXT2_NAME_LEN + entry->name_len + 3) & ~3;
-            if ((entry->rec_len - rec_len_real_atual) >= rec_len_necessario) {
-                uint16_t rec_len_antigo = entry->rec_len;
-                entry->rec_len = rec_len_real_atual;
-
+                // se por acaso for a última entrada no bloco
+                if (offset + entry->rec_len >= tamanho_bloco) {
+                    uint16_t rec_len_real_atual = (TAMANHO_CABECALHO_ENTRADA_DIR + entry->name_len + 3) & ~3;
+                    if ((entry->rec_len - rec_len_real_atual) >= rec_len_necessario) {
+                        uint16_t rec_len_antigo = entry->rec_len;
+                        entry->rec_len = rec_len_real_atual;
+                        
+                        offset += entry->rec_len;
+                        ext2_dir_entry *nova_entry = (ext2_dir_entry*)(buffer_dados + offset);
+                        nova_entry->inode = inode_filho;
+                        nova_entry->name_len = tam_nome_novo;
+                        nova_entry->file_type = tipo_arquivo;
+                        memcpy(nova_entry->name, nome_filho, tam_nome_novo);
+                        nova_entry->rec_len = rec_len_antigo - entry->rec_len;
+                        
+                        escrever_bloco(fd, sb, num_bloco, buffer_dados);
+                        free(buffer_dados); free(buffer_ponteiros_l1); free(buffer_ponteiros_l2);
+                        return 0; // sucesso
+                    }
+                }
                 offset += entry->rec_len;
-                ext2_dir_entry *nova_entry = (ext2_dir_entry*)(buffer_dados + offset);
-                nova_entry->inode = inode_filho;
-                nova_entry->name_len = strlen(nome_filho);
-                nova_entry->rec_len = rec_len_antigo - entry->rec_len;
-                nova_entry->file_type = tipo_arquivo;
-                strncpy(nova_entry->name, nome_filho, nova_entry->name_len);
-
-                escrever_bloco(fd, sb, inode_pai->block[i], buffer_dados);
-                free(buffer_dados);
-                return 0; // SUCESSO!
             }
-            offset += entry->rec_len;
         }
     }
 
-    // --- FASE 2: Não havia espaço. Tenta alocar um novo bloco em um ponteiro direto livre ---
+    // se não achou, busca nos blocos de indireção simples (block[12])
+    if (inode_pai->block[12] != 0) {
+        if (ler_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros_l1) == 0) {
+            for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
+                uint32_t num_bloco = buffer_ponteiros_l1[i];
+                if (num_bloco == 0) continue;
+                
+                if (ler_bloco(fd, sb, num_bloco, buffer_dados) == 0) {
+                    uint32_t offset = 0;
+                    ext2_dir_entry* entry;
+                    while (offset < tamanho_bloco) {
+                        entry = (ext2_dir_entry*)(buffer_dados + offset);
+                        if (entry->rec_len == 0) break;
+                        
+                        if (offset + entry->rec_len >= tamanho_bloco) {
+                            uint16_t rec_len_real_atual = (TAMANHO_CABECALHO_ENTRADA_DIR + entry->name_len + 3) & ~3;
+                            if ((entry->rec_len - rec_len_real_atual) >= rec_len_necessario) {
+                                uint16_t rec_len_antigo = entry->rec_len;
+                                entry->rec_len = rec_len_real_atual;
+                                
+                                offset += entry->rec_len;
+                                ext2_dir_entry *nova_entry = (ext2_dir_entry*)(buffer_dados + offset);
+                                nova_entry->inode = inode_filho;
+                                nova_entry->name_len = tam_nome_novo;
+                                nova_entry->file_type = tipo_arquivo;
+                                memcpy(nova_entry->name, nome_filho, tam_nome_novo);
+                                nova_entry->rec_len = rec_len_antigo - entry->rec_len;
+                                
+                                escrever_bloco(fd, sb, num_bloco, buffer_dados);
+                                free(buffer_dados); free(buffer_ponteiros_l1); free(buffer_ponteiros_l2);
+                                return 0; // sucesso
+                            }
+                        }
+                        offset += entry->rec_len;
+                    }
+                }
+            }
+        }
+    }
+
+    // se ainda não achou, busca nos blocos de indireção dupla (block[13])
+    if (inode_pai->block[13] != 0) {
+        if (ler_bloco(fd, sb, inode_pai->block[13], buffer_ponteiros_l1) == 0) { // Lê L1
+            for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
+                if (buffer_ponteiros_l1[i] == 0) continue;
+                if (ler_bloco(fd, sb, buffer_ponteiros_l1[i], buffer_ponteiros_l2) == 0) { // Lê L2
+                    for (uint32_t j = 0; j < ponteiros_por_bloco; j++) {
+                        uint32_t num_bloco = buffer_ponteiros_l2[j];
+                        if (num_bloco == 0) continue;
+                        
+                        if (ler_bloco(fd, sb, num_bloco, buffer_dados) == 0) {
+                            uint32_t offset = 0;
+                            ext2_dir_entry* entry;
+                            while (offset < tamanho_bloco) {
+                                entry = (ext2_dir_entry*)(buffer_dados + offset);
+                                if (entry->rec_len == 0) break;
+                                
+                                if (offset + entry->rec_len >= tamanho_bloco) {
+                                    uint16_t rec_len_real_atual = (TAMANHO_CABECALHO_ENTRADA_DIR + entry->name_len + 3) & ~3;
+                                    if ((entry->rec_len - rec_len_real_atual) >= rec_len_necessario) {
+                                        uint16_t rec_len_antigo = entry->rec_len;
+                                        entry->rec_len = rec_len_real_atual;
+                                        
+                                        offset += entry->rec_len;
+                                        ext2_dir_entry *nova_entry = (ext2_dir_entry*)(buffer_dados + offset);
+                                        nova_entry->inode = inode_filho;
+                                        nova_entry->name_len = tam_nome_novo;
+                                        nova_entry->file_type = tipo_arquivo;
+                                        memcpy(nova_entry->name, nome_filho, tam_nome_novo);
+                                        nova_entry->rec_len = rec_len_antigo - entry->rec_len;
+                                        
+                                        escrever_bloco(fd, sb, num_bloco, buffer_dados);
+                                        free(buffer_dados); free(buffer_ponteiros_l1); free(buffer_ponteiros_l2);
+                                        return 0; // sucesso
+                                    }
+                                }
+                                offset += entry->rec_len;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // fase 2
+    // se não achou espaço tenta alocar novo bloco
+
+    uint32_t novo_bloco_dados = alocar_bloco(fd, sb, gdt, inode_pai_num);
+    if (novo_bloco_dados == 0) goto falha;
+
+    // prepara o conteúdo do novo bloco de dados
+    memset(buffer_dados, 0, tamanho_bloco);
+    ext2_dir_entry* nova_entry = (ext2_dir_entry*)buffer_dados;
+    nova_entry->inode = inode_filho;
+    nova_entry->name_len = tam_nome_novo;
+    nova_entry->rec_len = tamanho_bloco;
+    nova_entry->file_type = tipo_arquivo;
+    memcpy(nova_entry->name, nome_filho, tam_nome_novo);
+    escrever_bloco(fd, sb, novo_bloco_dados, buffer_dados);
+
+    // tenta linkar o novo bloco em um ponteiro direto livre
     for (int i = 0; i < 12; i++) {
         if (inode_pai->block[i] == 0) {
-            uint32_t novo_bloco_num = alocar_bloco(fd, sb, gdt, inode_pai_num);
-            if (novo_bloco_num == 0) { free(buffer_dados); return -1; }
-
-            inode_pai->block[i] = novo_bloco_num;
-            inode_pai->blocks += (tamanho_bloco / 512);
-            inode_pai->size += tamanho_bloco;
-
-            memset(buffer_dados, 0, tamanho_bloco);
-            ext2_dir_entry* nova_entry = (ext2_dir_entry*)buffer_dados;
-            nova_entry->inode = inode_filho;
-            nova_entry->name_len = strlen(nome_filho);
-            nova_entry->rec_len = tamanho_bloco;
-            nova_entry->file_type = tipo_arquivo;
-            strncpy(nova_entry->name, nome_filho, nova_entry->name_len);
-
-            escrever_bloco(fd, sb, novo_bloco_num, buffer_dados);
-            free(buffer_dados);
-            return 0; // SUCESSO!
+            inode_pai->block[i] = novo_bloco_dados;
+            goto sucesso;
         }
     }
 
-    // --- FASE 3: Ponteiros diretos estão cheios. Lida com o bloco de indireção simples (block[12]) ---
-    uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
-    uint32_t* buffer_ponteiros = malloc(tamanho_bloco);
-    if(!buffer_ponteiros) {
-        perror("adicionar_entrada: falha ao alocar buffer de ponteiros");
-        free(buffer_dados);
-        return -1;
-    }
-
+    // tenta linkar no bloco de indireção simples
     if (inode_pai->block[12] == 0) {
-        // O bloco de indireção ainda não existe. Precisamos criá-lo.
-        uint32_t num_bloco_indireto = alocar_bloco(fd, sb, gdt, inode_pai_num);
-        if (num_bloco_indireto == 0) { free(buffer_dados); free(buffer_ponteiros); return -1; }
-        
-        uint32_t num_bloco_dados_novo = alocar_bloco(fd, sb, gdt, inode_pai_num);
-        if (num_bloco_dados_novo == 0) {
-            liberar_bloco(fd, sb, gdt, num_bloco_indireto); // Rollback
-            free(buffer_dados); free(buffer_ponteiros); return -1;
-        }
-        
-        // Atualiza o inode pai para apontar para o novo bloco de indireção
-        inode_pai->block[12] = num_bloco_indireto;
-        inode_pai->blocks += (tamanho_bloco / 512); // Conta o bloco de indireção
-        
-        // Prepara e escreve o bloco de indireção
-        memset(buffer_ponteiros, 0, tamanho_bloco);
-        buffer_ponteiros[0] = num_bloco_dados_novo; // O primeiro ponteiro aponta para novo bloco de dados
-        escrever_bloco(fd, sb, num_bloco_indireto, buffer_ponteiros);
-        
-        // Agora, prepara e escreve o novo bloco de dados (mesma lógica da FASE 2)
+        uint32_t bloco_indireto = alocar_bloco(fd, sb, gdt, inode_pai_num);
+        if (bloco_indireto == 0) { liberar_bloco(fd, sb, gdt, novo_bloco_dados); goto falha; }
+        inode_pai->block[12] = bloco_indireto;
         inode_pai->blocks += (tamanho_bloco / 512);
-        inode_pai->size += tamanho_bloco;
-        
-        memset(buffer_dados, 0, tamanho_bloco);
-        ext2_dir_entry* nova_entry = (ext2_dir_entry*)buffer_dados;
-        nova_entry->inode = inode_filho;
-        nova_entry->name_len = strlen(nome_filho);
-        nova_entry->rec_len = tamanho_bloco;
-        nova_entry->file_type = tipo_arquivo;
-        strncpy(nova_entry->name, nome_filho, nova_entry->name_len);
-
-        escrever_bloco(fd, sb, num_bloco_dados_novo, buffer_dados);
-
+        memset(buffer_ponteiros_l1, 0, tamanho_bloco);
+        buffer_ponteiros_l1[0] = novo_bloco_dados;
+        escrever_bloco(fd, sb, bloco_indireto, buffer_ponteiros_l1);
+        goto sucesso;
     } else {
-        // O bloco de indireção já existe. Procura um ponteiro livre dentro dele.
-        ler_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros);
+        ler_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros_l1);
         for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
-            if (buffer_ponteiros[i] == 0) {
-                uint32_t num_bloco_dados_novo = alocar_bloco(fd, sb, gdt, inode_pai_num);
-                if (num_bloco_dados_novo == 0) { free(buffer_dados); free(buffer_ponteiros); return -1; }
-
-                // Encontrou um slot! Atualiza o bloco de ponteiros
-                buffer_ponteiros[i] = num_bloco_dados_novo;
-                escrever_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros);
-                
-                // Prepara e escreve o novo bloco de dados
-                inode_pai->blocks += (tamanho_bloco / 512);
-                inode_pai->size += tamanho_bloco;
-
-                memset(buffer_dados, 0, tamanho_bloco);
-                ext2_dir_entry* nova_entry = (ext2_dir_entry*)buffer_dados;
-                nova_entry->inode = inode_filho;
-                nova_entry->name_len = strlen(nome_filho);
-                nova_entry->rec_len = tamanho_bloco;
-                nova_entry->file_type = tipo_arquivo;
-                strncpy(nova_entry->name, nome_filho, nova_entry->name_len);
-                
-                escrever_bloco(fd, sb, num_bloco_dados_novo, buffer_dados);
-                
-                free(buffer_dados);
-                free(buffer_ponteiros);
-                return 0; // SUCESSO!
+            if (buffer_ponteiros_l1[i] == 0) {
+                buffer_ponteiros_l1[i] = novo_bloco_dados;
+                escrever_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros_l1);
+                goto sucesso;
             }
         }
-        // Se o loop terminar, o bloco de indireção simples está cheio.
-        fprintf(stderr, "Erro: Não há espaço no diretório (bloco de indireção simples cheio).\n");
-        free(buffer_dados);
-        free(buffer_ponteiros);
-        return -1;
     }
 
-    free(buffer_dados);
-    free(buffer_ponteiros);
-    return 0; // Sucesso se saiu da criação do bloco de indireção
+    // tenta alocar no bloco de indireção dupla (block[13])
+    // essa condição é rara mas optamos por manter a lógica caso seja necessário - pois para o projeto não vamos ter uma imagem tão grande
+    if (inode_pai->block[13] == 0) {
+        
+        // cenário A: A árvore de indireção dupla ainda não existe -> criamos tudo do zero
+        // precisamos alocar 3 blocos: L1, o primeiro L2, e o bloco de dados
+        uint32_t num_bloco_l1 = alocar_bloco(fd, sb, gdt, inode_pai_num);
+        if (num_bloco_l1 == 0) { liberar_bloco(fd, sb, gdt, novo_bloco_dados); goto falha; }
+
+        uint32_t num_bloco_l2 = alocar_bloco(fd, sb, gdt, inode_pai_num);
+        if (num_bloco_l2 == 0) { liberar_bloco(fd, sb, gdt, num_bloco_l1); liberar_bloco(fd, sb, gdt, novo_bloco_dados); goto falha; }
+
+        // se todas as alocações foram bem-sucedidas, começamos entao a linkar e escrever
+        inode_pai->block[13] = num_bloco_l1;
+        inode_pai->blocks += (tamanho_bloco / 512); // conta o novo bloco L1
+
+        // prepara e escreve o novo bloco L2. Ele aponta para nosso bloco de dados
+        memset(buffer_ponteiros_l2, 0, tamanho_bloco);
+        buffer_ponteiros_l2[0] = novo_bloco_dados;
+        escrever_bloco(fd, sb, num_bloco_l2, buffer_ponteiros_l2);
+        inode_pai->blocks += (tamanho_bloco / 512); // conta o novo bloco L2
+
+        // prepara e escreve o novo bloco L1 - ele aponta para nosso novo bloco L2
+        memset(buffer_ponteiros_l1, 0, tamanho_bloco);
+        buffer_ponteiros_l1[0] = num_bloco_l2;
+        escrever_bloco(fd, sb, num_bloco_l1, buffer_ponteiros_l1);
+        
+        goto preparar_e_escrever_novo_bloco; // Pula para a parte final que prepara o bloco de dados
+    } else {
+        // cenário B: O bloco L1 já existe -> recisamos percorrer ele
+
+        ler_bloco(fd, sb, inode_pai->block[13], buffer_ponteiros_l1); // Lê o bloco L1
+        for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
+            if (buffer_ponteiros_l1[i] == 0) {
+                // se encontramos um slot livre em L1 - podemos criar um novo bloco L2 
+                uint32_t num_bloco_l2 = alocar_bloco(fd, sb, gdt, inode_pai_num);
+                if (num_bloco_l2 == 0) { liberar_bloco(fd, sb, gdt, novo_bloco_dados); goto falha; }
+                
+                buffer_ponteiros_l1[i] = num_bloco_l2; // linka o novo L2 no L1
+                escrever_bloco(fd, sb, inode_pai->block[13], buffer_ponteiros_l1);      //   salva o L1 modificado
+                inode_pai->blocks += (tamanho_bloco / 512); // conta o novo bloco L2
+                
+                // prepara o novo bloco L2
+                memset(buffer_ponteiros_l2, 0, tamanho_bloco);
+                buffer_ponteiros_l2[0] = novo_bloco_dados;
+                escrever_bloco(fd, sb, num_bloco_l2, buffer_ponteiros_l2);
+                goto preparar_e_escrever_novo_bloco;
+            }
+
+            // se o ponteiro L1 não for nulo, verifica o bloco L2 que ele aponta
+            if (ler_bloco(fd, sb, buffer_ponteiros_l1[i], buffer_ponteiros_l2) == 0) {
+                for (uint32_t j = 0; j < ponteiros_por_bloco; j++) {
+                    if (buffer_ponteiros_l2[j] == 0) { // encontrou slot livre em um bloco L2 existente
+                        buffer_ponteiros_l2[j] = novo_bloco_dados;
+                        escrever_bloco(fd, sb, buffer_ponteiros_l1[i], buffer_ponteiros_l2); // salva L2 modificado
+                        goto preparar_e_escrever_novo_bloco;
+                    }
+                }
+            }
+        }
+    }
+
+preparar_e_escrever_novo_bloco:
+    inode_pai->size += tamanho_bloco;
+    inode_pai->blocks += (tamanho_bloco / 512);
+    memset(buffer_dados, 0, tamanho_bloco);
+    nova_entry = (ext2_dir_entry*)buffer_dados;
+    nova_entry->inode = inode_filho;
+    nova_entry->name_len = tam_nome_novo;
+    nova_entry->rec_len = tamanho_bloco;
+    nova_entry->file_type = tipo_arquivo;
+    memcpy(nova_entry->name, nome_filho, tam_nome_novo);
+    escrever_bloco(fd, sb, novo_bloco_dados, buffer_dados);
+    goto sucesso;
+
+falha:
+    free(buffer_dados); free(buffer_ponteiros_l1); free(buffer_ponteiros_l2);
+    fprintf(stderr, "Erro: Falha ao alocar novo bloco ou diretório está completamente cheio.\n");
+    return -1;
+
+sucesso:
+    free(buffer_dados); free(buffer_ponteiros_l1); free(buffer_ponteiros_l2);
+    return 0;
+
+
 }
+
+
 
 
 
