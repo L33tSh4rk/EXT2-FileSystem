@@ -21,12 +21,36 @@
 
 
 void imprimir_ajuda(void) {
-    printf("\n--- Shell Ext2 - Comandos Disponíveis ---\n");
-    printf("  print superblock          - Exibe as informações detalhadas do superbloco.\n");
-    printf("  print inode <numero>      - Exibe as informações detalhadas de um inode específico.\n");
-    printf("  help                      - Mostra esta mensagem de ajuda.\n");
-    printf("  exit | quit               - Encerra o programa.\n");
-    printf("--------------------------------------------------------------------------\n\n");
+    printf("\n========================================== Shell Ext2 - Comandos Disponíveis ==========================================\n");
+
+    printf("\n  --- Comandos de Navegação e Inspeção ---\n");
+    printf("  %-45s - Lista o conteúdo do diretório atual ou do [caminho] especificado.\n", "ls [caminho]");
+    printf("  %-45s - Muda para o diretório de trabalho especificado pelo <caminho>.\n", "cd <caminho>");
+    printf("  %-45s - Mostra o caminho absoluto do diretório de trabalho atual.\n", "pwd");
+    printf("  %-45s - Exibe o conteúdo de um arquivo de texto.\n", "cat <arquivo>");
+    printf("  %-45s - Mostra os atributos formatados de um arquivo ou diretório.\n", "attr <arquivo|diretório>");
+    printf("  %-45s - Mostra um resumo das informações do sistema de arquivos.\n", "info");
+
+    printf("\n  --- Comandos de Criação e Modificação ---\n");
+    printf("  %-45s - Cria um arquivo vazio ou atualiza seu timestamp.\n", "touch <arquivo>");
+    printf("  %-45s - Cria um novo diretório.\n", "mkdir <diretório>");
+    printf("  %-45s - Renomeia um arquivo ou diretório no diretório atual.\n", "rename <nome_antigo> <nome_novo>");
+    printf("  %-45s - Copia um arquivo da imagem para o seu computador.\n", "cp <origem_na_imagem> <destino_local_absoluto>");
+    
+    printf("\n  --- Comandos de Remoção ---\n");
+    printf("  %-45s - Remove (apaga) um arquivo.\n", "rm <arquivo>");
+    printf("  %-45s - Remove um diretório vazio.\n", "rmdir <diretório>");
+
+    printf("\n  --- Comandos de Depuração ---\n");
+    printf("  %-45s - Exibe os dados brutos do superbloco.\n", "print superblock");
+    printf("  %-45s - Exibe os dados brutos de um inode específico.\n", "print inode <numero>");
+    printf("  %-45s - Exibe os dados brutos de todos os descritores de grupo.\n", "print groups");
+
+    printf("\n  --- Comandos do Shell ---\n");
+    printf("  %-45s - Mostra esta mensagem de ajuda.\n", "help");
+    printf("  %-45s - Encerra o programa.\n", "exit | quit");
+
+    printf("=======================================================================================================================\n\n");
 }
 
 
