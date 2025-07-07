@@ -1,3 +1,17 @@
+/**
+ * @file       commands.h
+ * @brief      Declaração dos protótipos para as funções de comando do shell.
+ * 
+ *  @author     Allan Custódio Diniz Marques (L33tSh4rk)
+ *
+ * Este arquivo serve como a interface entre o main.c e as implementações
+ * dos comandos em commands.c, garantindo a consistência das chamadas de função.
+ *
+ * Data de criação: 19 de junho de 2025
+ * Data de atualização: 6 de julho de 2025
+ *
+ */
+
 #ifndef COMMANDS_H
 #define COMMANDS_H
 

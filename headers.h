@@ -1,3 +1,17 @@
+/**
+ * @file       headers.h
+ * @brief      Declaração das estruturas de dados do Ext2 e protótipos de funções de sistema.
+ * 
+ *  @author     Allan Custódio Diniz Marques (L33tSh4rk)
+ *
+ * Este é o cabeçalho principal que define a "API" interna do nosso sistema,
+ * com as structs, macros e protótipos de systemOp.c.
+ *
+ * Data de criação: 24 de maio de 2025
+ * Data de atualização: 6 de julho de 2025
+ *
+ */
+
 #ifndef EXT2_HEADERS
 #define EXT2_HEADERS
 

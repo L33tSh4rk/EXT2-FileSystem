@@ -1,11 +1,17 @@
 /**
  * @file systemOp.c
  * @brief Implementação das funções de baixo nível para manipulação do sistema de arquivos Ext2.
+ * 
+ * @author Allan Custódio Diniz Marques (L33tSh4rk), 
+ * @author Vitor Hugo Melo Ribeiro
  *
  * Este arquivo contém a lógica para ler e escrever as estruturas fundamentais do Ext2,
  * como o superbloco e os descritores de grupo. Ele serve como a camada de abstração
  * entre o shell e o disco (imagem do sistema de arquivos).
  *
+ * Data de criação: 24 de abril de 2025
+ * Data de atualização: 6 de julho de 2025
+ * 
  */
 
 #include <stdio.h>
@@ -281,7 +287,7 @@ uint32_t obter_tamanho_inode(const superbloco *sb) {
  * @param fd Descritor de arquivo do disco.
  * @param sb Ponteiro para o superbloco (necessário para cálculos).
  * @param num_grupos_out Ponteiro de saída para armazenar o número de grupos lidos.
- * @return Ponteiro para o array de descritores de grupo, ou NULL em caso de erro.
+ * @return Ponteiro para o array de descritores de grupo, ou NULL em caso de err
  */
 group_desc* ler_descritores_grupo(int fd, const superbloco* sb, uint32_t* num_grupos_out) {
     if (!sb || !num_grupos_out) {
@@ -290,10 +296,10 @@ group_desc* ler_descritores_grupo(int fd, const superbloco* sb, uint32_t* num_gr
     }
 
     uint32_t tamanho_bloco = calcular_tamanho_do_bloco(sb);
-    // A GDT começa no bloco seguinte ao superbloco.
-    // Se block_size = 1024, SB está no bloco 1, GDT no bloco 2 (offset 2048).
-    // Se block_size > 1024, SB está no bloco 0, GDT no bloco 1.
-    // O campo s_first_data_block nos dá o primeiro bloco de dados, que sempre vem depois da GDT.
+    // A GDT começa no bloco seguinte ao superbloco
+    // Se block_size = 1024, SB está no bloco 1, GDT no bloco 2 (offset 2048)
+    // Se block_size > 1024, SB está no bloco 0, GDT no bloco 1
+    // O campo s_first_data_block nos dá o primeiro bloco de dados, que sempre vem depois da GDT
     off_t gdt_offset = (off_t)(sb->first_data_block + 1) * tamanho_bloco;
 
     // Calcula o número total de grupos de blocos.
@@ -1014,13 +1020,13 @@ uint32_t procurar_entrada_no_diretorio(int fd, const superbloco* sb, const group
     uint32_t inode_encontrado = 0;
     int status_busca = 0;
 
-    // 1. Busca nos Blocos Diretos
+    // Busca nos Blocos Diretos
     for (int i = 0; i < 12; ++i) {
         status_busca = buscar_nome_em_bloco(fd, sb, dir_ino.block[i], nome_procurado, &inode_encontrado, buffer_dados);
         if (status_busca != 0) goto cleanup; // Se encontrou (1) ou deu erro (-1), para a busca.
     }
 
-    // 2. Busca no Bloco de Indireção Simples
+    // Busca no Bloco de Indireção Simples
     if (dir_ino.block[12] != 0) {
         if (ler_bloco(fd, sb, dir_ino.block[12], buffer_ponteiros) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
@@ -1030,7 +1036,7 @@ uint32_t procurar_entrada_no_diretorio(int fd, const superbloco* sb, const group
         }
     }
 
-    // 3. Busca no Bloco de Indireção Dupla
+    // Busca no Bloco de Indireção Dupla
     if (dir_ino.block[13] != 0) {
         if (ler_bloco(fd, sb, dir_ino.block[13], buffer_ponteiros) == 0) { // Lê L1
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
@@ -1275,12 +1281,12 @@ char* ler_conteudo_arquivo(int fd, const superbloco* sb, const inode* file_ino) 
     char* ptr_buffer_atual = buffer_conteudo;
     uint32_t ponteiros_por_bloco = tamanho_bloco / sizeof(uint32_t);
 
-    // 1. Blocos Diretos (0 a 11)
+    // Blocos Diretos
     for (int i = 0; i < 12; ++i) {
         if (copiar_bloco_de_dados(fd, sb, file_ino->block[i], file_ino, &ptr_buffer_atual, &bytes_lidos, bloco_dado_temp) != 0) goto erro;
     }
 
-    // 2. Bloco de Indireção Simples (12)
+    // Bloco de Indireção Simples (12)
     if (bytes_lidos < file_ino->size && file_ino->block[12] != 0) {
         if (ler_bloco(fd, sb, file_ino->block[12], bloco_ponteiros_temp) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
@@ -1289,7 +1295,7 @@ char* ler_conteudo_arquivo(int fd, const superbloco* sb, const inode* file_ino) 
         }
     }
 
-    // 3. Bloco de Indireção Dupla (13)
+    // Bloco de Indireção Dupla (13)
     if (bytes_lidos < file_ino->size && file_ino->block[13] != 0) {
         if (ler_bloco(fd, sb, file_ino->block[13], bloco_ponteiros_temp) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; ++i) {
@@ -1305,7 +1311,11 @@ char* ler_conteudo_arquivo(int fd, const superbloco* sb, const inode* file_ino) 
         }
     }
 
-    // 4. Bloco de Indireção Tripla (14)
+    // Bloco de Indireção Tripla (14)
+    /*
+    * IMPORTANTE: a lógica de busca em indireção tripla neste caso foi implementada caso o arquivo que esteja sendo tratado exista mas seja grande demais
+    *    apenas para não retornar erro de arquivo inexistente quando na verdade ele existe 
+    */
     if (bytes_lidos < file_ino->size && file_ino->block[14] != 0) {
         // Lê o bloco de ponteiros de Nível 1 (L1)
         if (ler_bloco(fd, sb, file_ino->block[14], bloco_ponteiros_temp) == 0) {
@@ -1714,7 +1724,7 @@ uint32_t alocar_bloco(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_nu
     }
 
     // Estratégia de alocação:
-    // 1. Tentar alocar no mesmo grupo do inode.
+    // Tentar alocar no mesmo grupo do inode.
     uint32_t grupo_ideal = (inode_num - 1) / sb->inodes_per_group;
     if (gdt[grupo_ideal].free_blocks_count > 0) {
         if (ler_bloco(fd, sb, gdt[grupo_ideal].block_bitmap, bitmap_buffer) == 0) {
@@ -1734,7 +1744,7 @@ uint32_t alocar_bloco(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_nu
         }
     }
 
-    // 2. Se não deu certo, procurar em qualquer outro grupo.
+    // Se não deu certo, procurar em qualquer outro grupo.
     for (uint32_t i = 0; i < num_grupos; ++i) {
         if (gdt[i].free_blocks_count > 0) {
             if (ler_bloco(fd, sb, gdt[i].block_bitmap, bitmap_buffer) != 0) continue;
@@ -1872,14 +1882,14 @@ int remover_entrada_diretorio(int fd, superbloco* sb, inode* inode_pai, const ch
         return -1;
     }
 
-    // 1. Procura nos blocos diretos
+    // Procura nos blocos diretos
     for (int i = 0; i < 12; i++) {
         if (inode_pai->block[i] == 0) continue;
         status = remover_entrada_em_bloco(fd, sb, inode_pai->block[i], nome_filho);
         if (status != 0) goto cleanup; // Se encontrou (1) ou deu erro (-1), termina.
     }
 
-    // 2. Procura no bloco de indireção simples
+    // Procura no bloco de indireção simples
     if (inode_pai->block[12] != 0) {
         if (ler_bloco(fd, sb, inode_pai->block[12], buffer_ponteiros) == 0) {
             for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {
@@ -1890,7 +1900,7 @@ int remover_entrada_diretorio(int fd, superbloco* sb, inode* inode_pai, const ch
         }
     }
 
-    // 3. Procura no bloco de indireção dupla
+    // Procura no bloco de indireção dupla
     if (inode_pai->block[13] != 0) {
         if (ler_bloco(fd, sb, inode_pai->block[13], buffer_ponteiros) == 0) { // Lê L1
             for (uint32_t i = 0; i < ponteiros_por_bloco; i++) {

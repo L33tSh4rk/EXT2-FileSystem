@@ -1,3 +1,18 @@
+/**
+ * @file       commands.c
+ * @brief      Implementação da lógica de cada comando de usuário do shell (ls, cd, cat, etc.).
+ * 
+ * @author      Allan Custódio Diniz Marques (L33tSh4rk) 
+ * @author      Vitor Hugo Melo Ribeiro
+ *
+ * Cada função neste arquivo corresponde a um comando que o usuário pode digitar
+ * e orquestra as chamadas para as funções de baixo nível em systemOp.c.
+ *
+ * Data de criação: 24 de abril de 2025
+ * Data de atualização: 6 de julho de 2025
+ *
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -9,16 +24,7 @@
 #include "commands.h" // Inclui protótipos
 #include "headers.h"  // Inclui definições e funções de baixo nível
 
-/**
- * @brief Executa a lógica do comando 'info', que imprime o superbloco.
- */
-void comando_info(const superbloco* sb, uint32_t num_grupos, char *argumentos) {
-    if (argumentos != NULL) {
-        printf("Comando 'info' não aceita argumentos.\n");
-        return;
-    }
-    imprimir_formato_info(sb, num_grupos);
-}
+
 
 // =================================================================================
 // Implementação dos Comandos
@@ -69,7 +75,21 @@ void comando_print_groups(const group_desc* gdt, uint32_t num_grupos) {
 }
 // =====================================================================================================
 
+/**
+ * @brief Executa a lógica do comando 'info', que mostra os atributos da imagem.
+ */
+void comando_info(const superbloco* sb, uint32_t num_grupos, char *argumentos) {
+    if (argumentos != NULL) {
+        printf("Comando 'info' não aceita argumentos.\n");
+        return;
+    }
+    imprimir_formato_info(sb, num_grupos);
+}
 
+
+/**
+ * @brief Executa a lógica do comando 'attr', que mostra as permissões de um dado arquivo ou diretório.
+ */
 void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
     if (argumentos == NULL) {
         printf("Uso: attr <caminho>\n");
@@ -89,7 +109,9 @@ void comando_attr(int fd, const superbloco* sb, const group_desc* gdt, uint32_t 
     }
 }
 
-
+/**
+ * @brief Executa a lógica do comando 'cat', que é responsável por mostrar o conteúdo de um arquivo regular em formato de texto.
+ */
 void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
     if (argumentos == NULL) {
         printf("Uso: cat <caminho_para_arquivo>\n");
@@ -123,7 +145,9 @@ void comando_cat(int fd, const superbloco* sb, const group_desc* gdt, uint32_t i
 }
 
 
-
+/**
+ * @brief Executa a lógica do comando 'ls', responsável por listar os arquivos e diretórios presentes no diretório corrente.
+ */
 void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
     uint32_t inode_a_listar;
     char* nome_alvo;
@@ -217,7 +241,7 @@ void comando_ls(int fd, const superbloco* sb, const group_desc* gdt, uint32_t in
 }
 
 /**
- * @brief Executa a lógica do comando 'pwd', que imprime o diretório de trabalho atual.
+ * @brief Executa a lógica do comando 'pwd', que imprime o caminho absoluto até o diretório atual.
  */
 void comando_pwd(const char* diretorio_atual_str, char* argumentos) {
     // Validação para garantir que o comando não recebeu argumentos extras
@@ -295,7 +319,7 @@ void comando_cd(int fd, const superbloco* sb, const group_desc* gdt,
 }
 
 /**
- * @brief Executa a lógica do comando 'touch', criando um arquivo vazio ou atualizando seu timestamp.
+ * @brief Executa a lógica do comando 'touch', criando um arquivo vazio.
  */
 void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
     if (argumentos == NULL) {
@@ -361,7 +385,7 @@ void comando_touch(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_a
 
 
 /**
- * @brief Executa a lógica do comando 'rm', removendo um arquivo.
+ * @brief Executa a lógica do comando 'rm', removendo um arquivo regular.
  */
 void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
     if (argumentos == NULL) {
@@ -451,7 +475,7 @@ void comando_rm(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atua
 
 
 /**
- * @brief Executa a lógica do comando 'mkdir', criando um novo diretório.
+ * @brief Executa a lógica do comando 'mkdir', criando um novo diretório vazio.
  */
 void comando_mkdir(int fd, superbloco* sb, group_desc* gdt, uint32_t inode_dir_atual, char* argumentos) {
     if (argumentos == NULL) {

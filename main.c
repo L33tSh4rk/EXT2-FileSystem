@@ -1,13 +1,15 @@
 /**
- * @file main.c
- * @brief Ponto de entrada do shell interativo para o sistema de arquivos Ext2.
+ * @file       main.c
+ * @brief      Ponto de entrada do shell, responsável pelo loop principal e por despachar os comandos.
+ * @author     Allan Custódio Diniz Marques (L33tSh4rk)
  *
- * Este programa inicializa a conexão com uma imagem de disco Ext2 e fornece
- * um shell simples para interagir com o sistema de arquivos através de comandos
- * como 'info', 'help' e 'exit'.
+ * Este arquivo inicializa a conexão com a imagem de disco, gerencia o estado do
+ * shell (como o diretório atual) e contém o loop principal que lê a entrada do
+ * usuário e chama a função de comando apropriada.
  *
- * Data de criação: 24 de abril de 2025
- * Data de atualização: 24 de junho de 2025
+ * Data de criação: 24 de maio de 2025
+ * Data de atualização: 6 de julho de 2025
+ *
  */
 
 #include <stdio.h>
@@ -167,57 +169,46 @@ int main(int argc, char *argv[]) {
             }
         }
         else if (strcmp(comando, "info") == 0) {
-            // Passa a string 'argumentos' para a função validar
             comando_info(&sb, num_grupos, argumentos);
         }
         
         else if (strcmp(comando, "attr") == 0) {
-            // A chamada usa 'argumentos' diretamente. A linha 'char* caminho_arg = ...' foi removida.
             comando_attr(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
         
         else if (strcmp(comando, "cat") == 0) {
-            // A chamada usa 'argumentos' diretamente.
             comando_cat(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
          else if (strcmp(comando, "ls") == 0) {
-            // A chamada usa 'argumentos' diretamente.
             comando_ls(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "cd") == 0) {
-            // A chamada usa 'argumentos' diretamente.
             comando_cd(fd, &sb, gdt, &diretorio_atual_inode, diretorio_atual_str, argumentos);
         }
 
         else if (strcmp(comando, "pwd") == 0){
-            // Passa a string 'argumentos' para a função validar
             comando_pwd(diretorio_atual_str, argumentos);
         }
 
         else if (strcmp(comando, "touch") == 0) {
-            // A chamada usa 'argumentos' diretamente.
             comando_touch(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "rm") == 0) {
-            // A chamada usa 'argumentos' diretamente.
             comando_rm(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "mkdir") == 0) {
-            // A chamada usa 'argumentos' diretamente.
             comando_mkdir(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "rmdir") == 0){
-            // A chamada usa 'argumentos' diretamente.
             comando_rmdir(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
         else if (strcmp(comando, "rename") == 0){
-            // A chamada usa 'argumentos' diretamente. A função interna fará o strtok.
             comando_rename(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
 
@@ -231,7 +222,6 @@ int main(int argc, char *argv[]) {
         } 
 
         else if (strcmp(comando, "cp") == 0) {
-            // A chamada usa 'argumentos' diretamente.
             comando_cp(fd, &sb, gdt, diretorio_atual_inode, argumentos);
         }
         
