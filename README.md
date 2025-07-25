@@ -120,7 +120,6 @@ Arquivo copiado com sucesso!
 
 - **Allan Custódio Diniz Marques** 
 - **Felipe Kenzo Suguimoto**
-- **Raquel de Oliveira**
 - **Vitor Hugo Melo Ribeiro**
 
 ##  Referências
